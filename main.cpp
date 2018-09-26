@@ -87,9 +87,18 @@ maybe MATCHHASHCOUNT should be a parameter to a point query function
 * maybe a second blog post on bloom filter?
  * blue noise is about quality of results.
  * bloom filter is about performance, but may also affect quality
+ * the paper from tyler sort of mentions a bloom filter related thing: "if we’re willing to probabilistically verify hash keys at the cost of some false collisions, we can still achieve O(d log d) lookups" 
+ * basically, if you get hashed items, you need to resolve them to points which takes longer. if you work only w/ hashes you can get false positives but it's faster. A bit bloom filter ish.
+
+* there was also a technique talked about
+
 
 Links:
 - inspiration: http://unboxresearch.com/articles/lsh_post1.html
+* another way to do it: http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.215.7690&rep=rep1&type=pdf
+ * make regular cells of any shape. store a list at each cell corner which has each point that is in a cell that uses that corner.
+ * talks about simplices fighting the curse of dimensionality.
+ * regular simplices can't tile higher dimensions though so it has an alternate formulation.
 - maybe some blue noise articles?
 
 */
