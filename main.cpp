@@ -2,7 +2,7 @@
 #define DIMENSION() 2      // dimensionality of the data points
 #define NUMPOINTS() 100    // the number of randomly generated (white noise) data points
 #define HASHCOUNT() 4      // how many hashes are done for each point
-
+#define POINTDOMAIN() 10   // the coordinates go from - this value to + this value
 
 #include <random>
 #include <array>
@@ -10,46 +10,109 @@
 #include <unordered_set>
 #include <stdint.h>
 
+// -------------------------------------------------------------------------------
+
 typedef std::array<float, DIMENSION()> TPoint;
 typedef uint32_t uint32;
 
 enum class PointID : uint32 {};
 
-std::mt19937& GetRNG()
+static const float c_pi = 3.14159265359f;
+
+// -------------------------------------------------------------------------------
+
+struct PointHashData
+{
+    std::array<float, DIMENSION()*DIMENSION()> rotation;
+    float offsetX;
+};
+
+typedef void(*GeneratePointHashDatas) (std::array<PointHashData, HASHCOUNT()>& hashDatas);
+
+class LHS
+{
+public:
+    LHS (const std::vector<TPoint>& points, GeneratePointHashDatas generatePointHashDatas)
+    {
+        generatePointHashDatas(m_pointHashDatas);
+
+        m_points = points;
+        for (size_t i = 0; i < m_points.size(); ++i)
+            AddPoint(m_points[i], PointID(i));
+    }
+
+private:
+
+    void AddPoint (const TPoint& point, PointID pointID)
+    {
+        for (int hashIndex = 0; hashIndex < HASHCOUNT(); ++hashIndex)
+        {
+            const PointHashData& pointHashData = m_pointHashDatas[hashIndex];
+
+            TPoint rotatedPoint;
+
+            for (int i = 0; i < DIMENSION(); ++i)
+            {
+                int rowOffset = i * DIMENSION();
+
+                rotatedPoint[i] = 0.0f;
+                for (int j = 0; j < DIMENSION(); ++j)
+                    rotatedPoint[i] += point[j] * pointHashData.rotation[rowOffset + j];
+            }
+
+            int hashValue = (int)std::floorf(rotatedPoint[0] + pointHashData.offsetX);
+
+            // TODO: put the point id into the bucket defined by hashValue - may be negative!
+            int ijkl = 0;
+        }
+    }
+
+private:
+
+    std::vector<TPoint> m_points; // a PointID (uint32) is the point's index in this list
+
+    std::array<PointHashData, HASHCOUNT()> m_pointHashDatas;
+
+    //std::array<std::unordered_set<PointID>, HASHCOUNT()> m_hashBuckets;
+};
+
+// -------------------------------------------------------------------------------
+
+std::mt19937& RNG()
 {
     static std::random_device rd;
     static std::mt19937 rng(rd());
     return rng;
 }
 
-class LHS
+// -------------------------------------------------------------------------------
+
+void GeneratePointHashDatas_WhiteNoise(std::array<PointHashData, HASHCOUNT()>& hashDatas)
 {
-public:
-    LHS (const std::vector<TPoint>& points)
+    static_assert(DIMENSION() == 2, "This function only works with 2d rotation matrices");
+
+    std::uniform_real_distribution<float> dist_angle(0.0f, 2.0f * c_pi);
+    std::uniform_real_distribution<float> dist_offset(0.0f, 1.0f);
+
+    for (PointHashData& p : hashDatas)
     {
-        m_points = points;
-        for (const TPoint& point : m_points)
-            AddPoint(point);
+        float angle = dist_angle(RNG());
+
+        float cosTheta = std::cosf(angle);
+        float sinTheta = std::cosf(angle);
+
+        p.rotation = { cosTheta, -sinTheta,
+                       sinTheta,  cosTheta };
+
+        p.offsetX = dist_offset(RNG());
     }
+}
 
-private:
-
-    void AddPoint (const TPoint& point)
-    {
-
-    }
-
-private:
-
-    std::vector<TPoint> m_points; // a point ID (uint32) is the point's index in this list
-
-    std::array<std::unordered_set<PointID>, HASHCOUNT()> m_hashBuckets;
-};
+// -------------------------------------------------------------------------------
 
 int main(int argc, char** argv)
 {
-    std::mt19937& rng = GetRNG();
-    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+     std::uniform_real_distribution<float> dist(-float(POINTDOMAIN()), float(POINTDOMAIN()));
 
     // make the random point set
     std::vector<TPoint> points;
@@ -57,11 +120,11 @@ int main(int argc, char** argv)
     for (TPoint& p : points)
     {
         for (float& f : p)
-            f = dist(rng);
+            f = dist(RNG());
     }
 
     // add the points to the locality sensitive hashing
-    LHS lhs(points);
+    LHS lhs(points, GeneratePointHashDatas_WhiteNoise);
 
 
 
@@ -69,6 +132,8 @@ int main(int argc, char** argv)
 }
 
 /*
+
+* do we need the full matrix? i don't think so, if we are only takiung the resulting x component!
 
 Tests:
 * white noise
@@ -100,5 +165,6 @@ Links:
  * talks about simplices fighting the curse of dimensionality.
  * regular simplices can't tile higher dimensions though so it has an alternate formulation.
 - maybe some blue noise articles?
+* random rotation matrices: https://en.wikipedia.org/wiki/Rotation_matrix#Uniform_random_rotation_matrices
 
 */
