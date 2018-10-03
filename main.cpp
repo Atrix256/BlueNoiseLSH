@@ -110,6 +110,26 @@ private:
 
 // -------------------------------------------------------------------------------
 
+void printfPoint(const char* name, const TPoint& point)
+{
+    if (name)
+        printf("%s: ", name);
+
+    bool first = true;
+    for (float f : point)
+    {
+        if (first)
+            printf("(");
+        else
+            printf(", ");
+        printf("%0.2f", f);
+        first = false;
+    }
+    printf(")\n");
+}
+
+// -------------------------------------------------------------------------------
+
 std::mt19937& RNG()
 {
     static std::random_device rd;
@@ -131,7 +151,7 @@ void GeneratePointHashDatas_WhiteNoise(std::array<PointHashData, HASHCOUNT()>& h
         float angle = dist_angle(RNG());
 
         float cosTheta = std::cosf(angle);
-        float sinTheta = std::cosf(angle);
+        float sinTheta = std::sinf(angle);
 
         p.rotation = { cosTheta, -sinTheta,
                        sinTheta,  cosTheta };
@@ -144,24 +164,37 @@ void GeneratePointHashDatas_Uniform(std::array<PointHashData, HASHCOUNT()>& hash
 {
     static_assert(DIMENSION() == 2, "This function only works with 2d rotation matrices");
 
-    std::uniform_real_distribution<float> dist_angle(0.0f, 2.0f * c_pi);
-    std::uniform_real_distribution<float> dist_offset(0.0f, 1.0f);
+    // To sample evenly across the two dimensional space of angle and offset, we are going to treat it as a square
+    // of dimensions (1,1) that we need to place HASHCOUNT() points in uniformly.
+    // So, we need to calculate the number of rows and columns we'll need.
+    // The number after each square (power of 2) number of points is when a new row is going to be added.
+    // So, rows == columns == ceil(sqrt(HASHCOUNT()).
+    // This would generalize to higher dimensions, replacing sqrt with the appropriate root
 
-    for (size_t i = 0; i < HASHCOUNT(); ++i)
+    // TODO: how to deal with the remainder? I guess you could choose a row or column and re-center them on that axis. is that most uniform?
+    // TODO: do we want to treat each axis equally? if not, would need to adjust the calculation somehow.
+
+    int size = int(ceilf(sqrtf(float(HASHCOUNT()))));
+
+    for (int i = 0; i < HASHCOUNT(); ++i)
     {
         PointHashData& p = hashDatas[i];
 
-        // TODO: uniform angle and offset. how exactly?
+        int x = i % size;
+        int y = i / size;
 
-        float angle = dist_angle(RNG());
+        float percentX = (float(x) + 0.5f) / float(size);
+        float percentY = (float(y) + 0.5f) / float(size);
+
+        float angle = percentX * 2.0f * c_pi;
 
         float cosTheta = std::cosf(angle);
-        float sinTheta = std::cosf(angle);
+        float sinTheta = std::sinf(angle);
 
         p.rotation = { cosTheta, -sinTheta,
                        sinTheta,  cosTheta };
 
-        p.offsetX = dist_offset(RNG());
+        p.offsetX = percentY;
     }
 }
 
@@ -185,9 +218,8 @@ void ReportQuery (LHS& lhs, TPoint& queryPoint)
                     foundMatch = true;
                 }
 
-                // TODO: maybe a function to print a point, that loops through dimensions
                 const TPoint& point = lhs.GetPoint(it->first);
-                printf("(%0.2f, %0.2f)\n", point[0], point[1]);
+                printfPoint(nullptr, point);
             }
         }
     }
@@ -217,8 +249,7 @@ int main(int argc, char** argv)
         for (float& f : queryPoint)
             f = dist(RNG());
 
-        // TODO: use the function to print a point
-        printf("Query Point: (%0.2f, %0.2f)\n", queryPoint[0], queryPoint[1]);
+        printfPoint("Query Point", queryPoint);
 
         printf("\n=====white noise=====\n");
         ReportQuery(lhs_white, queryPoint);
@@ -226,6 +257,8 @@ int main(int argc, char** argv)
         printf("\n=====uniform=====\n");
         ReportQuery(lhs_uniform, queryPoint);
     }
+
+    // TODO: ground truth, how? maybe visually show points missed or something? could calculate std deviations as concentric rings.
 
     return 0;
 }
