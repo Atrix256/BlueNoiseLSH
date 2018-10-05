@@ -62,7 +62,7 @@ private:
 
             int hashValue = (int)std::floorf(rotatedPoint[0] + pointHashData.offsetX);
 
-            // TODO: put the point id into the bucket defined by hashValue - may be negative!
+            // TODO: put the point id into the bucket defined by hashValue (a set per bucket) - may be negative!
             int ijkl = 0;
         }
     }
