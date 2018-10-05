@@ -1,8 +1,10 @@
 // Configurable settings
 #define DIMENSION() 2      // dimensionality of the data points
 #define NUMPOINTS() 100    // the number of randomly generated (white noise) data points
-#define HASHCOUNT() 4      // how many hashes are done for each point
+#define HASHCOUNT() 1      // how many hashes are done for each point
 #define POINTDOMAIN() 10   // the coordinates go from - this value to + this value
+
+// TODO: tune HASHCOUNT() and the other parameters!
 
 #include <random>
 #include <array>
@@ -27,6 +29,35 @@ typedef uint8_t uint8;
 enum class PointID : uint32 {};
 
 static const float c_pi = 3.14159265359f;
+
+// -------------------------------------------------------------------------------
+
+TPoint Multiply(const TPoint& point, const std::array<float, DIMENSION()*DIMENSION()>& matrix)
+{
+    TPoint ret;
+    for (int i = 0; i < DIMENSION(); ++i)
+    {
+        int rowOffset = i * DIMENSION();
+
+        ret[i] = 0.0f;
+        for (int j = 0; j < DIMENSION(); ++j)
+            ret[i] += point[j] * matrix[rowOffset + j];
+    }
+    return ret;
+}
+
+// -------------------------------------------------------------------------------
+
+std::array<float, DIMENSION()*DIMENSION()> Transpose(const std::array<float, DIMENSION()*DIMENSION()>& matrix)
+{
+    std::array<float, DIMENSION()*DIMENSION()> ret;
+
+    for (int i = 0; i < DIMENSION(); ++i)
+        for (int j = 0; j < DIMENSION(); ++j)
+            ret[i * DIMENSION() + j] = matrix[j * DIMENSION() + i];
+
+    return ret;
+}
 
 // -------------------------------------------------------------------------------
 
@@ -85,22 +116,18 @@ public:
         return m_points[(uint32)point];
     }
 
+    const PointHashData& GetPointHashData (int hashIndex) const
+    {
+        return m_pointHashDatas[hashIndex];
+    }
+
 private:
 
     int HashPoint (const TPoint& point, int hashIndex) const
     {
         // calculate the hash of the point by rotating it, adding to it's x component and flooring that x component.
         const PointHashData& pointHashData = m_pointHashDatas[hashIndex];
-
-        TPoint rotatedPoint;
-        for (int i = 0; i < DIMENSION(); ++i)
-        {
-            int rowOffset = i * DIMENSION();
-
-            rotatedPoint[i] = 0.0f;
-            for (int j = 0; j < DIMENSION(); ++j)
-                rotatedPoint[i] += point[j] * pointHashData.rotation[rowOffset + j];
-        }
+        TPoint rotatedPoint = Multiply(point, pointHashData.rotation);
         return (int)std::floorf(rotatedPoint[0] + pointHashData.offsetX);
     }
 
@@ -169,7 +196,7 @@ void GeneratePointHashDatas_WhiteNoise(std::array<PointHashData, HASHCOUNT()>& h
         p.rotation = { cosTheta, -sinTheta,
                        sinTheta,  cosTheta };
 
-        p.offsetX = dist_offset(RNG());
+        p.offsetX = 0.0f;// dist_offset(RNG());
     }
 }
 
@@ -199,7 +226,8 @@ void GeneratePointHashDatas_Uniform(std::array<PointHashData, HASHCOUNT()>& hash
         float percentX = (float(x) + 0.5f) / float(size);
         float percentY = (float(y) + 0.5f) / float(size);
 
-        float angle = percentX * 2.0f * c_pi;
+        // choose an angle from 0 to 180 degrees, because angle > 180 degrees is redundant.
+        float angle = percentX * c_pi;
 
         float cosTheta = std::cosf(angle);
         float sinTheta = std::sinf(angle);
@@ -207,7 +235,7 @@ void GeneratePointHashDatas_Uniform(std::array<PointHashData, HASHCOUNT()>& hash
         p.rotation = { cosTheta, -sinTheta,
                        sinTheta,  cosTheta };
 
-        p.offsetX = percentY;
+        p.offsetX = 0.0f;// percentY;
     }
 }
 
@@ -262,7 +290,39 @@ void DrawCircle(std::vector<uint8>& pixels, int imageWidth, int imageHeight, int
 
 // -------------------------------------------------------------------------------
 
-void ReportQueryAsImage(const TPoint& queryPoint, const std::unordered_map<PointID, int>& results, const std::vector<TPoint>& points, const char* name)
+void DrawHashBuckets(std::vector<uint8>& pixels, int imageWidth, int imageHeight, float cellSize, const PointHashData& pointHashData, uint8 R, uint8 G, uint8 B)
+{
+    uint8* pixel = pixels.data();
+    for (int iy = 0; iy < imageHeight; ++iy)
+    {
+        for (int ix = 0; ix < imageWidth; ++ix)
+        {
+            // transform pixel into the hash bucket space
+            TPoint rawPoint = {float(ix), float(iy)};
+            TPoint rotatedPoint = Multiply(rawPoint, pointHashData.rotation);
+            rotatedPoint[0] += pointHashData.offsetX;
+
+            // figure out the distance from this rotated point to the edges of the hash bucket
+            float cellPosX;
+            if (rotatedPoint[0] < 0.0f)
+                cellPosX = cellSize - fmodf(fabsf(rotatedPoint[0]) + 0.5f, cellSize);
+            else
+                cellPosX = fmodf(rotatedPoint[0] + 0.5f, cellSize);
+            float distance = cellSize / 2.0f - fabsf(cellPosX - cellSize / 2.0f);
+
+            // draw the hash bucket lines
+            float alpha = SmoothStep(distance, 2.0f, 0.0f);
+            pixel[0] = Lerp(pixel[0], R, alpha);
+            pixel[1] = Lerp(pixel[1], G, alpha);
+            pixel[2] = Lerp(pixel[2], B, alpha);
+            pixel += 4;
+        }
+    }
+}
+
+// -------------------------------------------------------------------------------
+
+void ReportQueryAsImage(const LHS& lhs, const TPoint& queryPoint, const std::unordered_map<PointID, int>& results, const std::vector<TPoint>& points, const char* name)
 {
     static_assert(DIMENSION() == 2, "This function only works with 2d points");
 
@@ -273,9 +333,18 @@ void ReportQueryAsImage(const TPoint& queryPoint, const std::unordered_map<Point
     int height = 500;
     int circleRadius = int(float(width) / 100.0f);
     int colorCircleRadius = std::min(int(float(width) / 100.0f * 0.9f), circleRadius - 1);
+
+    // create the image and fill it with white
     std::vector<uint8> pixels;
     pixels.resize(width*height * 4);
     std::fill(pixels.begin(), pixels.end(), 255);
+
+    // draw the hash buckets
+    for (int hashIndex = 0; hashIndex < HASHCOUNT(); ++hashIndex)
+    {
+        const PointHashData& pointHashData = lhs.GetPointHashData(hashIndex);
+        DrawHashBuckets(pixels, width, height, float(width) * 0.5f / float(POINTDOMAIN()), pointHashData, 128, 128, 128);
+    }
 
     // draw all the points as black dots
     for (TPoint p : points)
@@ -326,8 +395,6 @@ void ReportQueryAsImage(const TPoint& queryPoint, const std::unordered_map<Point
         DrawCircle(pixels, width, height, x, y, circleRadius, 0, 0, 255);
     }
 
-    // TODO: draw the cells. how?
-
     stbi_write_png(fileName, width, height, 4, pixels.data(), 0);
 }
 
@@ -359,7 +426,7 @@ void ReportQuery (const LHS& lhs, const TPoint& queryPoint, const std::vector<TP
         }
     }
 
-    ReportQueryAsImage(queryPoint, results, points, name);
+    ReportQueryAsImage(lhs, queryPoint, results, points, name);
 }
 
 // -------------------------------------------------------------------------------
@@ -399,15 +466,24 @@ int main(int argc, char** argv)
     return 0;
 }
 
+// TODO: it seems like the grid lines may be wrong sometimes even with no x offset. check out the white noise screenshot checked in. It probably has to do with where it goes negative. the distance calculation is probably wrong...
+
 /*
 
+TODO:
+* make the offset work with grid drawing. I think it has something to do with how we floor it when we use it for points so it's a randomized rounding? dunno. also seems to maybe happen when the point is a negative number?
+* need a minimum hash count i think. make a #define
+* maybe an option to color cells based on how many hash collisions they have with the query point
+? is the grid line at 0 thinner? i think it is... why?
+
 * do we need the full matrix? i don't think so, if we are only takiung the resulting x component!
+ * maybe we don't care
 
 Tests:
 * white noise
 * uniform
 * blue noise
-* LDS (golden ratio?)
+* LDS (golden ratio?) - yes. generalized golden ratio. http://extremelearning.com.au/unreasonable-effectiveness-of-quasirandom-sequences/
 * compare vs linear search to get ground truth
 
 * Some way to gather stats, but also want to make diagrams i think. Maybe some animated like the other blog post does?
