@@ -11,10 +11,18 @@
 #include <unordered_map>
 #include <stdint.h>
 
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#define STBI_MSC_SECURE_CRT
+#include "stb_image_write.h"
+
 // -------------------------------------------------------------------------------
 
 typedef std::array<float, DIMENSION()> TPoint;
 typedef uint32_t uint32;
+typedef uint8_t uint8;
 
 enum class PointID : uint32 {};
 
@@ -44,15 +52,20 @@ public:
             AddPoint(m_points[i], PointID(i));
     }
 
-    void Query (const TPoint& point, std::unordered_map<PointID, int>& results)
+    void Query (const TPoint& point, std::unordered_map<PointID, int>& results) const
     {
         for (int hashIndex = 0; hashIndex < HASHCOUNT(); ++hashIndex)
         {
-            PointHashData& pointHashData = m_pointHashDatas[hashIndex];
+            const PointHashData& pointHashData = m_pointHashDatas[hashIndex];
 
             int hashValue = HashPoint(point, hashIndex);
 
-            for (PointID pointID : pointHashData.m_hashBuckets[hashValue])
+            auto it = pointHashData.m_hashBuckets.find(hashValue);
+
+            if (it == pointHashData.m_hashBuckets.end())
+                continue;
+
+            for (PointID pointID : it->second)
             {
                 auto it = results.find(pointID);
                 if (it != results.end())
@@ -67,17 +80,17 @@ public:
         }
     }
 
-    const TPoint& GetPoint(PointID point)
+    const TPoint& GetPoint(PointID point) const
     {
         return m_points[(uint32)point];
     }
 
 private:
 
-    int HashPoint (const TPoint& point, int hashIndex)
+    int HashPoint (const TPoint& point, int hashIndex) const
     {
         // calculate the hash of the point by rotating it, adding to it's x component and flooring that x component.
-        PointHashData& pointHashData = m_pointHashDatas[hashIndex];
+        const PointHashData& pointHashData = m_pointHashDatas[hashIndex];
 
         TPoint rotatedPoint;
         for (int i = 0; i < DIMENSION(); ++i)
@@ -200,8 +213,130 @@ void GeneratePointHashDatas_Uniform(std::array<PointHashData, HASHCOUNT()>& hash
 
 // -------------------------------------------------------------------------------
 
-void ReportQuery (LHS& lhs, TPoint& queryPoint)
+float SmoothStep(float value, float min, float max)
 {
+    float x = (value - min) / (max - min);
+    x = std::min(x, 1.0f);
+    x = std::max(x, 0.0f);
+
+    return 3.0f * x * x - 2.0f * x * x * x;
+}
+
+// -------------------------------------------------------------------------------
+
+template <typename T>
+T Lerp(T A, T B, float t)
+{
+    return T(float(A) * (1.0f - t) + float(B) * t);
+}
+
+// -------------------------------------------------------------------------------
+
+void DrawCircle(std::vector<uint8>& pixels, int imageWidth, int imageHeight, int cx, int cy, int radius, uint8 R, uint8 G, uint8 B)
+{
+    int startX = std::max(cx - radius - 4, 0);
+    int startY = std::max(cy - radius - 4, 0);
+    int endX = std::min(cx + radius + 4, imageWidth - 1);
+    int endY = std::min(cy + radius + 4, imageHeight - 1);
+
+    for (int iy = startY; iy <= endY; ++iy)
+    {
+        float dy = float(cy - iy);
+        uint8* pixel = &pixels[(iy * imageWidth + startX) * 4];
+        for (int ix = startX; ix <= endX; ++ix)
+        {
+            float dx = float(cx - ix);
+
+            float distance = std::max(std::sqrtf(dx * dx + dy * dy) - float(radius), 0.0f);
+
+            float alpha = SmoothStep(distance, 2.0f, 0.0f);
+
+            pixel[0] = Lerp(pixel[0], R, alpha);
+            pixel[1] = Lerp(pixel[1], G, alpha);
+            pixel[2] = Lerp(pixel[2], B, alpha);
+
+            pixel += 4;
+        }
+    }
+}
+
+// -------------------------------------------------------------------------------
+
+void ReportQueryAsImage(const TPoint& queryPoint, const std::unordered_map<PointID, int>& results, const std::vector<TPoint>& points, const char* name)
+{
+    static_assert(DIMENSION() == 2, "This function only works with 2d points");
+
+    char fileName[256];
+    sprintf_s(fileName, "out/%s.png", name);
+
+    int width = 500;
+    int height = 500;
+    int circleRadius = int(float(width) / 100.0f);
+    int colorCircleRadius = std::min(int(float(width) / 100.0f * 0.9f), circleRadius - 1);
+    std::vector<uint8> pixels;
+    pixels.resize(width*height * 4);
+    std::fill(pixels.begin(), pixels.end(), 255);
+
+    // draw all the points as black dots
+    for (TPoint p : points)
+    {
+        for (float& f : p)
+        {
+            f /= (2.0f * float(POINTDOMAIN()));
+            f += 0.5f;
+        }
+
+        int x = int(p[0] * float(width - 1) + 0.5f);
+        int y = int(p[1] * float(height - 1) + 0.5f);
+
+        DrawCircle(pixels, width, height, x, y, circleRadius, 0, 0, 0);
+    }
+
+    // draw the results based on their match count
+    for (auto it : results)
+    {
+        TPoint p = points[(uint32)it.first];
+
+        for (float& f : p)
+        {
+            f /= (2.0f * float(POINTDOMAIN()));
+            f += 0.5f;
+        }
+
+        int x = int(p[0] * float(width - 1) + 0.5f);
+        int y = int(p[1] * float(height - 1) + 0.5f);
+
+        float percentMatched = float(it.second) / float(HASHCOUNT());
+        uint8 color = uint8(percentMatched * 255.0f);
+
+        DrawCircle(pixels, width, height, x, y, colorCircleRadius, 255, color, 0);
+    }
+
+    // draw the query point
+    {
+        TPoint p = queryPoint;
+        for (float& f : p)
+        {
+            f /= (2.0f * float(POINTDOMAIN()));
+            f += 0.5f;
+        }
+        int x = int(p[0] * float(width - 1) + 0.5f);
+        int y = int(p[1] * float(height - 1) + 0.5f);
+
+        DrawCircle(pixels, width, height, x, y, circleRadius, 0, 0, 255);
+    }
+
+    // TODO: draw the cells. how?
+
+    stbi_write_png(fileName, width, height, 4, pixels.data(), 0);
+}
+
+// -------------------------------------------------------------------------------
+
+void ReportQuery (const LHS& lhs, const TPoint& queryPoint, const std::vector<TPoint>& points, const char* name)
+{
+    printf("\n=====%s=====\n", name);
+
     std::unordered_map<PointID, int> results;
     lhs.Query(queryPoint, results);
 
@@ -223,7 +358,11 @@ void ReportQuery (LHS& lhs, TPoint& queryPoint)
             }
         }
     }
+
+    ReportQueryAsImage(queryPoint, results, points, name);
 }
+
+// -------------------------------------------------------------------------------
 
 int main(int argc, char** argv)
 {
@@ -251,11 +390,8 @@ int main(int argc, char** argv)
 
         printfPoint("Query Point", queryPoint);
 
-        printf("\n=====white noise=====\n");
-        ReportQuery(lhs_white, queryPoint);
-
-        printf("\n=====uniform=====\n");
-        ReportQuery(lhs_uniform, queryPoint);
+        ReportQuery(lhs_white, queryPoint, points, "white");
+        ReportQuery(lhs_uniform, queryPoint, points, "uniform");
     }
 
     // TODO: ground truth, how? maybe visually show points missed or something? could calculate std deviations as concentric rings.
