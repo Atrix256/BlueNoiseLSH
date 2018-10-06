@@ -1,8 +1,12 @@
 // Configurable settings
-#define DIMENSION() 2      // dimensionality of the data points
-#define NUMPOINTS() 100    // the number of randomly generated (white noise) data points
-#define HASHCOUNT() 1      // how many hashes are done for each point
-#define POINTDOMAIN() 10   // the coordinates go from - this value to + this value
+#define DIMENSION()    2      // dimensionality of the data points
+#define NUMPOINTS()    100    // the number of randomly generated (white noise) data points
+#define HASHCOUNT()    4      // how many hashes are done for each point
+#define MINHASHCOUNT() 0      // the minimum number of hash collisions that must occur for a point to be considered at all close
+#define POINTDOMAIN()  10     // the coordinates go from - this value to + this value
+
+#define IMAGEWIDTH() 500
+#define IMAGEHEIGHT() 500
 
 // TODO: tune HASHCOUNT() and the other parameters!
 
@@ -196,7 +200,7 @@ void GeneratePointHashDatas_WhiteNoise(std::array<PointHashData, HASHCOUNT()>& h
         p.rotation = { cosTheta, -sinTheta,
                        sinTheta,  cosTheta };
 
-        p.offsetX = 0.0f;// dist_offset(RNG());
+        p.offsetX = dist_offset(RNG());
     }
 }
 
@@ -235,7 +239,7 @@ void GeneratePointHashDatas_Uniform(std::array<PointHashData, HASHCOUNT()>& hash
         p.rotation = { cosTheta, -sinTheta,
                        sinTheta,  cosTheta };
 
-        p.offsetX = 0.0f;// percentY;
+        p.offsetX = percentY;
     }
 }
 
@@ -295,23 +299,21 @@ void DrawHashBuckets(std::vector<uint8>& pixels, int imageWidth, int imageHeight
     uint8* pixel = pixels.data();
     for (int iy = 0; iy < imageHeight; ++iy)
     {
+        float posY = Lerp(-float(POINTDOMAIN()), float(POINTDOMAIN()), float(iy) / float(imageHeight));
         for (int ix = 0; ix < imageWidth; ++ix)
         {
+            float posX = Lerp(-float(POINTDOMAIN()), float(POINTDOMAIN()), float(ix) / float(imageHeight));
+
             // transform pixel into the hash bucket space
-            TPoint rawPoint = {float(ix), float(iy)};
+            TPoint rawPoint = {float(posX), float(posY)};
             TPoint rotatedPoint = Multiply(rawPoint, pointHashData.rotation);
             rotatedPoint[0] += pointHashData.offsetX;
 
-            // figure out the distance from this rotated point to the edges of the hash bucket
-            float cellPosX;
-            if (rotatedPoint[0] < 0.0f)
-                cellPosX = cellSize - fmodf(fabsf(rotatedPoint[0]) + 0.5f, cellSize);
-            else
-                cellPosX = fmodf(rotatedPoint[0] + 0.5f, cellSize);
-            float distance = cellSize / 2.0f - fabsf(cellPosX - cellSize / 2.0f);
+            float distX = std::fmodf(fabsf(rotatedPoint[0]), 1.0f);
+            float distance = 0.5f - fabsf(distX - 0.5f);
 
             // draw the hash bucket lines
-            float alpha = SmoothStep(distance, 2.0f, 0.0f);
+            float alpha = SmoothStep(distance * float(POINTDOMAIN()) * 2.0f, 2.0f, 0.0f);
             pixel[0] = Lerp(pixel[0], R, alpha);
             pixel[1] = Lerp(pixel[1], G, alpha);
             pixel[2] = Lerp(pixel[2], B, alpha);
@@ -329,8 +331,8 @@ void ReportQueryAsImage(const LHS& lhs, const TPoint& queryPoint, const std::uno
     char fileName[256];
     sprintf_s(fileName, "out/%s.png", name);
 
-    int width = 500;
-    int height = 500;
+    int width = IMAGEWIDTH();
+    int height = IMAGEHEIGHT();
     int circleRadius = int(float(width) / 100.0f);
     int colorCircleRadius = std::min(int(float(width) / 100.0f * 0.9f), circleRadius - 1);
 
@@ -343,7 +345,7 @@ void ReportQueryAsImage(const LHS& lhs, const TPoint& queryPoint, const std::uno
     for (int hashIndex = 0; hashIndex < HASHCOUNT(); ++hashIndex)
     {
         const PointHashData& pointHashData = lhs.GetPointHashData(hashIndex);
-        DrawHashBuckets(pixels, width, height, float(width) * 0.5f / float(POINTDOMAIN()), pointHashData, 128, 128, 128);
+        DrawHashBuckets(pixels, width, height, float(width) * 0.5f / float(POINTDOMAIN()), pointHashData, 192, 192, 192);
     }
 
     // draw all the points as black dots
@@ -364,6 +366,9 @@ void ReportQueryAsImage(const LHS& lhs, const TPoint& queryPoint, const std::uno
     // draw the results based on their match count
     for (auto it : results)
     {
+        if (it.second < MINHASHCOUNT())
+            continue;
+
         TPoint p = points[(uint32)it.first];
 
         for (float& f : p)
@@ -375,7 +380,7 @@ void ReportQueryAsImage(const LHS& lhs, const TPoint& queryPoint, const std::uno
         int x = int(p[0] * float(width - 1) + 0.5f);
         int y = int(p[1] * float(height - 1) + 0.5f);
 
-        float percentMatched = float(it.second) / float(HASHCOUNT());
+        float percentMatched = (float(it.second) - float(MINHASHCOUNT())) / float(HASHCOUNT() - MINHASHCOUNT());
         uint8 color = uint8(percentMatched * 255.0f);
 
         DrawCircle(pixels, width, height, x, y, colorCircleRadius, 255, color, 0);
@@ -407,7 +412,7 @@ void ReportQuery (const LHS& lhs, const TPoint& queryPoint, const std::vector<TP
     std::unordered_map<PointID, int> results;
     lhs.Query(queryPoint, results);
 
-    for (int hashMatchCount = HASHCOUNT(); hashMatchCount >= 1; --hashMatchCount)
+    for (int hashMatchCount = HASHCOUNT(); hashMatchCount >= MINHASHCOUNT(); --hashMatchCount)
     {
         bool foundMatch = false;
         for (auto it = results.begin(); it != results.end(); ++it)
@@ -471,10 +476,10 @@ int main(int argc, char** argv)
 /*
 
 TODO:
-* make the offset work with grid drawing. I think it has something to do with how we floor it when we use it for points so it's a randomized rounding? dunno. also seems to maybe happen when the point is a negative number?
-* need a minimum hash count i think. make a #define
+* test the offset specifically, with 1 bucket and an offset. make sure it's happy :)
+* the uniform generation sucks. reconsider it.
+? are the buckets too small? i think they might be... instead of having the domain thing for points, could have a bucket size scale.
 * maybe an option to color cells based on how many hash collisions they have with the query point
-? is the grid line at 0 thinner? i think it is... why?
 
 * do we need the full matrix? i don't think so, if we are only takiung the resulting x component!
  * maybe we don't care
@@ -487,8 +492,7 @@ Tests:
 * compare vs linear search to get ground truth
 
 * Some way to gather stats, but also want to make diagrams i think. Maybe some animated like the other blog post does?
-
-maybe MATCHHASHCOUNT should be a parameter to a point query function
+* and maybe calculate mean and variance of cell size if you can
 
 ----- LATER -----
 
