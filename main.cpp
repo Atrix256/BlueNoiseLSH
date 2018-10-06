@@ -7,6 +7,8 @@
 
 #define IMAGESIZE() 500       // the size of the image - width and height both.
 
+#define DOANGLEIMAGETEST() 1
+
 // TODO: tune HASHCOUNT() and the other parameters!
 
 #include <random>
@@ -251,13 +253,18 @@ void GeneratePointHashDatas_GoldenRatio(std::array<PointHashData, HASHCOUNT()>& 
 
     // TODO: how to deal with offset? do we need the generalized golden ratio and need to square it?
 
+    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+
+    float initialValue = dist(RNG());
+
     for (int i = 0; i < HASHCOUNT(); ++i)
     {
         PointHashData& p = hashDatas[i];
 
-        // TODO: should we choose between 0 and pi, instead of 2 pi?
-        // choose an angle from 0 to 180 degrees, because angle > 180 degrees is redundant.
-        float angle = std::fmodf(float(i) * c_goldenRatioConjugate, 1.0f) * 2.0f * c_pi;
+        // choose an angle from 0 to 180 degrees, because angle > 180 degrees is redundant and actually harmful.
+        // the angles are "double sided".
+        // check the angle test images for more information!
+        float angle = std::fmodf(initialValue + float(i) * c_goldenRatioConjugate, 1.0f) * 2.0f * c_pi;
 
         float cosTheta = std::cosf(angle);
         float sinTheta = std::sinf(angle);
@@ -290,6 +297,73 @@ T Lerp(T A, T B, float t)
 
 // -------------------------------------------------------------------------------
 
+void DrawLine(std::vector<uint8>& pixels, int imageWidth, int imageHeight, int x1, int y1, int x2, int y2, uint8 R, uint8 G, uint8 B)
+{
+    // pad the AABB of pixels we scan, to account for anti aliasing
+    int startX = std::max(std::min(x1, x2) - 4, 0);
+    int startY = std::max(std::min(y1, y2) - 4, 0);
+    int endX = std::min(std::max(x1, x2) + 4, imageWidth - 1);
+    int endY = std::min(std::max(y1, y2) + 4, imageHeight - 1);
+
+    // if (x1,y1) is A and (x2,y2) is B, get a normalized vector from A to B called AB
+    float ABX = float(x2 - x1);
+    float ABY = float(y2 - y1);
+    float ABLen = std::sqrtf(ABX*ABX + ABY * ABY);
+    ABX /= ABLen;
+    ABY /= ABLen;
+
+    // scan the AABB of our line segment, drawing pixels for the line, as is appropriate
+    for (int iy = startY; iy <= endY; ++iy)
+    {
+        uint8* pixel = &pixels[(iy * imageWidth + startX) * 4];
+        for (int ix = startX; ix <= endX; ++ix)
+        {
+            // project this current pixel onto the line segment to get the closest point on the line segment to the point
+            float ACX = float(ix - x1);
+            float ACY = float(iy - y1);
+            float lineSegmentT = ACX * ABX + ACY * ABY;
+            lineSegmentT = std::min(lineSegmentT, ABLen);
+            lineSegmentT = std::max(lineSegmentT, 0.0f);
+            float closestX = float(x1) + lineSegmentT * ABX;
+            float closestY = float(y1) + lineSegmentT * ABY;
+
+            // calculate the distance from this pixel to the closest point on the line segment
+            float distanceX = float(ix) - closestX;
+            float distanceY = float(iy) - closestY;
+            float distance = std::sqrtf(distanceX*distanceX + distanceY * distanceY);
+
+            // use the distance to figure out how transparent the pixel should be, and apply the color to the pixel
+            float alpha = SmoothStep(distance, 2.0f, 0.0f);
+
+            if (alpha > 0.0f)
+            {
+                pixel[0] = Lerp(pixel[0], R, alpha);
+                pixel[1] = Lerp(pixel[1], G, alpha);
+                pixel[2] = Lerp(pixel[2], B, alpha);
+            }
+
+            pixel += 4;
+        }
+    }
+}
+
+// -------------------------------------------------------------------------------
+
+void ClearImage(std::vector<uint8>& pixels, int imageWidth, int imageHeight, uint8 R, uint8 G, uint8 B)
+{
+    uint8* pixel = pixels.data();
+    for (int i = 0, c = imageWidth * imageHeight; i < c; ++i)
+    {
+        pixel[0] = R;
+        pixel[1] = G;
+        pixel[2] = B;
+        pixel[3] = 255;
+        pixel += 4;
+    }
+}
+
+// -------------------------------------------------------------------------------
+
 void DrawCircle(std::vector<uint8>& pixels, int imageWidth, int imageHeight, int cx, int cy, int radius, uint8 R, uint8 G, uint8 B)
 {
     int startX = std::max(cx - radius - 4, 0);
@@ -309,9 +383,12 @@ void DrawCircle(std::vector<uint8>& pixels, int imageWidth, int imageHeight, int
 
             float alpha = SmoothStep(distance, 2.0f, 0.0f);
 
-            pixel[0] = Lerp(pixel[0], R, alpha);
-            pixel[1] = Lerp(pixel[1], G, alpha);
-            pixel[2] = Lerp(pixel[2], B, alpha);
+            if (alpha > 0.0f)
+            {
+                pixel[0] = Lerp(pixel[0], R, alpha);
+                pixel[1] = Lerp(pixel[1], G, alpha);
+                pixel[2] = Lerp(pixel[2], B, alpha);
+            }
 
             pixel += 4;
         }
@@ -340,9 +417,13 @@ void DrawHashBuckets(std::vector<uint8>& pixels, int imageWidth, int imageHeight
 
             // draw the hash bucket lines
             float alpha = SmoothStep(distance, 4.0f * float(POINTDOMAIN()) / float(IMAGESIZE()), 0.0f);
-            pixel[0] = Lerp(pixel[0], R, alpha);
-            pixel[1] = Lerp(pixel[1], G, alpha);
-            pixel[2] = Lerp(pixel[2], B, alpha);
+
+            if (alpha > 0.0f)
+            {
+                pixel[0] = Lerp(pixel[0], R, alpha);
+                pixel[1] = Lerp(pixel[1], G, alpha);
+                pixel[2] = Lerp(pixel[2], B, alpha);
+            }
             pixel += 4;
         }
     }
@@ -460,9 +541,88 @@ void ReportQuery (const LHS& lhs, const TPoint& queryPoint, const std::vector<TP
 
 // -------------------------------------------------------------------------------
 
+void AngleImageTest()
+{
+    static const int c_numAngles = 10;
+
+    std::vector<uint8> pixelsAngle;
+    pixelsAngle.resize(IMAGESIZE()*IMAGESIZE() * 4);
+    std::fill(pixelsAngle.begin(), pixelsAngle.end(), 255);
+    DrawCircle(pixelsAngle, IMAGESIZE(), IMAGESIZE(), IMAGESIZE() / 2, IMAGESIZE() / 2, IMAGESIZE() / 2 - 2, 240, 240, 240);
+    DrawCircle(pixelsAngle, IMAGESIZE(), IMAGESIZE(), IMAGESIZE() / 2, IMAGESIZE() / 2, IMAGESIZE() / 2 - 4, 255, 255, 255);
+
+    std::vector<uint8> pixelsAngleDoubleSided;
+    pixelsAngleDoubleSided.resize(IMAGESIZE()*IMAGESIZE() * 4);
+    std::fill(pixelsAngleDoubleSided.begin(), pixelsAngleDoubleSided.end(), 255);
+    DrawCircle(pixelsAngleDoubleSided, IMAGESIZE(), IMAGESIZE(), IMAGESIZE() / 2, IMAGESIZE() / 2, IMAGESIZE() / 2 - 2, 240, 240, 240);
+    DrawCircle(pixelsAngleDoubleSided, IMAGESIZE(), IMAGESIZE(), IMAGESIZE() / 2, IMAGESIZE() / 2, IMAGESIZE() / 2 - 4, 255, 255, 255);
+
+    std::vector<uint8> pixelsHalfAngle;
+    pixelsHalfAngle.resize(IMAGESIZE()*IMAGESIZE() * 4);
+    std::fill(pixelsHalfAngle.begin(), pixelsHalfAngle.end(), 255);
+    DrawCircle(pixelsHalfAngle, IMAGESIZE(), IMAGESIZE(), IMAGESIZE() / 2, IMAGESIZE() / 2, IMAGESIZE() / 2 - 2, 240, 240, 240);
+    DrawCircle(pixelsHalfAngle, IMAGESIZE(), IMAGESIZE(), IMAGESIZE() / 2, IMAGESIZE() / 2, IMAGESIZE() / 2 - 4, 255, 255, 255);
+
+    std::vector<uint8> pixelsHalfAngleDoubleSided;
+    pixelsHalfAngleDoubleSided.resize(IMAGESIZE()*IMAGESIZE() * 4);
+    std::fill(pixelsHalfAngleDoubleSided.begin(), pixelsHalfAngleDoubleSided.end(), 255);
+    DrawCircle(pixelsHalfAngleDoubleSided, IMAGESIZE(), IMAGESIZE(), IMAGESIZE() / 2, IMAGESIZE() / 2, IMAGESIZE() / 2 - 2, 240, 240, 240);
+    DrawCircle(pixelsHalfAngleDoubleSided, IMAGESIZE(), IMAGESIZE(), IMAGESIZE() / 2, IMAGESIZE() / 2, IMAGESIZE() / 2 - 4, 255, 255, 255);
+
+    for (int i = 0; i < c_numAngles; ++i)
+    {
+        // use golden ratio to make angles between 0 and 2*pi
+        {
+            float angleRad = std::fmodf(float(i) * c_goldenRatioConjugate, 1.0f) * 2.0f * c_pi;
+            float angleDeg = angleRad * 180.0f / c_pi;
+
+            int lineEndX = int(cos(angleRad) * (float(IMAGESIZE() / 2) - 4) + float(IMAGESIZE() / 2));
+            int lineEndY = int(sin(angleRad) * (float(IMAGESIZE() / 2) - 4) + float(IMAGESIZE() / 2));
+
+            lineEndY = IMAGESIZE() - lineEndY;
+
+            uint8 color = uint8(255.0f * float(i) / float(c_numAngles));
+
+            DrawLine(pixelsAngle, IMAGESIZE(), IMAGESIZE(), IMAGESIZE() / 2, IMAGESIZE() / 2, lineEndX, lineEndY, color, color, color);
+
+            // also draw the double sided version
+            DrawLine(pixelsAngleDoubleSided, IMAGESIZE(), IMAGESIZE(), IMAGESIZE() - lineEndX, IMAGESIZE() - lineEndY, lineEndX, lineEndY, color, color, color);
+        }
+
+        // use golden ratio to make angles between 0 and pi
+        {
+            float angleRad = std::fmodf(float(i) * c_goldenRatioConjugate, 1.0f) * c_pi;
+            float angleDeg = angleRad * 180.0f / c_pi;
+
+            int lineEndX = int(cos(angleRad) * (float(IMAGESIZE() / 2) - 4) + float(IMAGESIZE() / 2));
+            int lineEndY = int(sin(angleRad) * (float(IMAGESIZE() / 2) - 4) + float(IMAGESIZE() / 2));
+
+            lineEndY = IMAGESIZE() - lineEndY;
+
+            uint8 color = uint8(255.0f * float(i) / float(c_numAngles));
+
+            DrawLine(pixelsHalfAngle, IMAGESIZE(), IMAGESIZE(), IMAGESIZE() / 2, IMAGESIZE() / 2, lineEndX, lineEndY, color, color, color);
+
+            // also draw the double sided version
+            DrawLine(pixelsHalfAngleDoubleSided, IMAGESIZE(), IMAGESIZE(), IMAGESIZE() - lineEndX, IMAGESIZE() - lineEndY, lineEndX, lineEndY, color, color, color);
+        }
+    }
+
+    stbi_write_png("out/AngleTest.png", IMAGESIZE(), IMAGESIZE(), 4, pixelsAngle.data(), 0);
+    stbi_write_png("out/AngleTestDS.png", IMAGESIZE(), IMAGESIZE(), 4, pixelsAngleDoubleSided.data(), 0);
+    stbi_write_png("out/AngleTestHalf.png", IMAGESIZE(), IMAGESIZE(), 4, pixelsHalfAngle.data(), 0);
+    stbi_write_png("out/AngleTestHalfDS.png", IMAGESIZE(), IMAGESIZE(), 4, pixelsHalfAngleDoubleSided.data(), 0);
+}
+
+// -------------------------------------------------------------------------------
+
 int main(int argc, char** argv)
 {
-     std::uniform_real_distribution<float> dist(-float(POINTDOMAIN()), float(POINTDOMAIN()));
+#if DOANGLEIMAGETEST()
+    AngleImageTest();
+#endif
+
+    std::uniform_real_distribution<float> dist(-float(POINTDOMAIN()), float(POINTDOMAIN()));
 
     // make the random point set
     std::vector<TPoint> points;
@@ -498,15 +658,13 @@ int main(int argc, char** argv)
 }
 
 /*
-
-TODO:
+ TODO:
 * test the offset specifically, with 1 bucket and an offset. make sure it's happy :)
-* the uniform generation sucks. reconsider it.
+* the uniform generation sucks. reconsider how to do it.
 ? are the buckets too small? i think they might be... instead of having the domain thing for points, could have a bucket size scale.
 * maybe an option to color cells based on how many hash collisions they have with the query point
 
-* do we need the full matrix? i don't think so, if we are only takiung the resulting x component!
- * maybe we don't care
+
 
 Tests:
 * white noise
@@ -518,8 +676,9 @@ Tests:
 * Some way to gather stats, but also want to make diagrams i think. Maybe some animated like the other blog post does?
 * and maybe calculate mean and variance of cell size if you can
 
------ LATER -----
+* higher dimensional testing? to see how blue noise / golden ratio / etc behave
 
+----- LATER -----
 
 * maybe a second blog post on bloom filter?
  * blue noise is about quality of results.
@@ -538,5 +697,16 @@ Links:
  * regular simplices can't tile higher dimensions though so it has an alternate formulation.
 - maybe some blue noise articles?
 * random rotation matrices: https://en.wikipedia.org/wiki/Rotation_matrix#Uniform_random_rotation_matrices
+
+Notes:
+* have a white noise [0,1] random value to start golden ratio by. You get the benefits of random values i believe, like you do with white noise.
+ * do you get all of them?
+* Does it make sense to do golden ratio between 0 and pi instead of 0 and 2 pi? yes. check the image tests. The angles are "double sided".
+
+
+----- LANDFILL -----
+
+* do we need the full matrix? i don't think so, if we are only takiung the resulting x component!
+ * maybe we don't care. implementation detail (optimization)
 
 */
