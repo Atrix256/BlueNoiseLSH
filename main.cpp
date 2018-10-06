@@ -206,6 +206,57 @@ void GeneratePointHashDatas_WhiteNoise(std::array<PointHashData, HASHCOUNT()>& h
     }
 }
 
+// -------------------------------------------------------------------------------
+
+void GeneratePointHashDatas_BlueNoise(std::array<PointHashData, HASHCOUNT()>& hashDatas)
+{
+    static_assert(DIMENSION() == 2, "This function only works with 2d rotation matrices");
+
+    std::uniform_real_distribution<float> dist_angle(0.0f, 2.0f * c_pi);
+    std::uniform_real_distribution<float> dist_offset(0.0f, 1.0f);
+
+    for (int hashIndex = 0; hashIndex < HASHCOUNT(); ++hashIndex)
+    {
+        int numCandidates = hashIndex * 20 + 1;
+
+        PointHashData bestPointHashData;
+
+        for (int candidateIndex = 0; candidateIndex < numCandidates; ++candidateIndex)
+        {
+            float candidateAngle = dist_angle(RNG());
+            float candidateDistance = dist_offset(RNG());
+
+            PointHashData candidatePointHashData;
+
+            float angle = dist_angle(RNG());
+
+            float cosTheta = std::cosf(angle);
+            float sinTheta = std::sinf(angle);
+
+            candidatePointHashData.rotation = { cosTheta, -sinTheta,
+                                                sinTheta,  cosTheta };
+
+            candidatePointHashData.offsetX = dist_offset(RNG());
+
+            if (candidateIndex == 0)
+            {
+                bestPointHashData = candidatePointHashData;
+                continue;
+            }
+
+            // TODO: take this new candidate as best if it's better than the current best
+            // Do a frobenius inner product to get an angular comparison.
+            // unsure how to combine angular and offset values into a score though.
+            // maybe put the offset off for now and just do frobenius inner product.
+        }
+
+        // keep the best
+        hashDatas[hashIndex] = bestPointHashData;
+    }
+}
+
+// -------------------------------------------------------------------------------
+
 void GeneratePointHashDatas_Uniform(std::array<PointHashData, HASHCOUNT()>& hashDatas)
 {
     static_assert(DIMENSION() == 2, "This function only works with 2d rotation matrices");
@@ -635,6 +686,7 @@ int main(int argc, char** argv)
 
     // add the points to the locality sensitive hashing
     LHS lhs_whiteNoise(points, GeneratePointHashDatas_WhiteNoise);
+    LHS lhs_blueNoise(points, GeneratePointHashDatas_BlueNoise);
     LHS lhs_uniform(points, GeneratePointHashDatas_Uniform);
     LHS lhs_goldenRatio(points, GeneratePointHashDatas_GoldenRatio);
 
@@ -648,6 +700,7 @@ int main(int argc, char** argv)
         printfPoint("Query Point", queryPoint);
 
         ReportQuery(lhs_whiteNoise, queryPoint, points, "whiteNoise");
+        ReportQuery(lhs_blueNoise, queryPoint, points, "blueNoise");
         ReportQuery(lhs_uniform, queryPoint, points, "uniform");
         ReportQuery(lhs_goldenRatio, queryPoint, points, "goldenRatio");
     }
@@ -696,6 +749,7 @@ Links:
  * talks about simplices fighting the curse of dimensionality.
  * regular simplices can't tile higher dimensions though so it has an alternate formulation.
 - maybe some blue noise articles?
+* frobenius inner product for checking similarity of rotation matrices: https://en.wikipedia.org/wiki/Frobenius_inner_product
 * random rotation matrices: https://en.wikipedia.org/wiki/Rotation_matrix#Uniform_random_rotation_matrices
 
 Notes:
