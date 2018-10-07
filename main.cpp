@@ -35,7 +35,10 @@ typedef uint8_t uint8;
 enum class PointID : uint32 {};
 
 static const float c_pi = 3.14159265359f;
-static const float c_goldenRatioConjugate = 0.61803398875f;
+static const float c_goldenRatioConjugate = 0.61803398875f;  // 1 / golden ratio. golden ratio is the positive solution to x^2 - x - 1 = 0
+
+static const float c_goldenRatio2 = 1.32471795724474602596f;  // positive solution to x^3-x-1 = 0
+static const float c_goldenRatio2Conjugate = 1.0f / c_goldenRatio2;
 
 // -------------------------------------------------------------------------------
 
@@ -261,7 +264,7 @@ void GeneratePointHashDatas_BlueNoise(std::array<PointHashData, HASHCOUNT()>& ha
                                                 sinTheta,  cosTheta };
 
             // TODO: we need to find a way to weigh offset in the mix for SimilarityScore(). after that, make this work.
-            candidatePointHashData.offsetX = 0.0f;// dist_offset(RNG());
+            candidatePointHashData.offsetX = dist_offset(RNG());
 
             // the score of this candidate is the most similar it is to any existing data point
             float maxScore = 0.0f;
@@ -336,7 +339,37 @@ void GeneratePointHashDatas_GoldenRatio(std::array<PointHashData, HASHCOUNT()>& 
 {
     static_assert(DIMENSION() == 2, "This function only works with 2d rotation matrices");
 
-    // TODO: how to deal with offset? do we need the generalized golden ratio and need to square it?
+    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+
+    float initialValueAngle = dist(RNG());
+    float initialValueOffset = dist(RNG());
+
+    for (int i = 0; i < HASHCOUNT(); ++i)
+    {
+        PointHashData& p = hashDatas[i];
+
+        // choose an angle from 0 to 180 degrees, because angle > 180 degrees is redundant and actually harmful.
+        // the angles are "double sided".
+        // check the angle test images for more information!
+        float angle = std::fmodf(initialValueAngle + float(i) * c_goldenRatioConjugate, 1.0f) * c_pi;
+
+        float cosTheta = std::cosf(angle);
+        float sinTheta = std::sinf(angle);
+
+        p.angle = angle;
+
+        p.rotation = { cosTheta, -sinTheta,
+                       sinTheta,  cosTheta };
+
+        p.offsetX = std::fmodf(initialValueOffset + float(i) * c_goldenRatioConjugate, 1.0f);
+    }
+}
+
+// -------------------------------------------------------------------------------
+
+void GeneratePointHashDatas_GoldenRatio2(std::array<PointHashData, HASHCOUNT()>& hashDatas)
+{
+    static_assert(DIMENSION() == 2, "This function only works with 2d rotation matrices");
 
     std::uniform_real_distribution<float> dist(0.0f, 1.0f);
 
@@ -349,7 +382,7 @@ void GeneratePointHashDatas_GoldenRatio(std::array<PointHashData, HASHCOUNT()>& 
         // choose an angle from 0 to 180 degrees, because angle > 180 degrees is redundant and actually harmful.
         // the angles are "double sided".
         // check the angle test images for more information!
-        float angle = std::fmodf(initialValue + float(i) * c_goldenRatioConjugate, 1.0f) * 2.0f * c_pi;
+        float angle = std::fmodf(initialValue + float(i) * c_goldenRatio2Conjugate, 1.0f) * c_pi;
 
         float cosTheta = std::cosf(angle);
         float sinTheta = std::sinf(angle);
@@ -359,7 +392,7 @@ void GeneratePointHashDatas_GoldenRatio(std::array<PointHashData, HASHCOUNT()>& 
         p.rotation = { cosTheta, -sinTheta,
                        sinTheta,  cosTheta };
 
-        p.offsetX = 0.0f;// percentY;
+        p.offsetX = std::fmodf(initialValue + float(i) * c_goldenRatio2Conjugate * c_goldenRatio2Conjugate, 1.0f);
     }
 }
 
@@ -610,7 +643,6 @@ void ReportQueryAsImage(const LHS& lhs, const TPoint& queryPoint, const std::uno
     DrawLine(pixels, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), barEndX, barStartY, barEndX, barEndY, 128, 128, 255);
     DrawLine(pixels, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), barStartX, barEndY, barEndX, barEndY, 128, 128, 255);
 
-    // TODO: should we show reversed angle too? i kinda think we should maybe.  Or maybe should it from 0 to pi.
     // TODO: since dots can overlap, maybe offset them on y based on hashIndex?
     for (int hashIndex = 0; hashIndex < HASHCOUNT(); ++hashIndex)
     {
@@ -618,8 +650,8 @@ void ReportQueryAsImage(const LHS& lhs, const TPoint& queryPoint, const std::uno
         float hashPercent = float(hashIndex) / float(HASHCOUNT() - 1);
         uint8 color = uint8(255.0f * hashPercent);
 
-        // draw the angle dots
-        float anglePercent = p.angle / (2.0f * c_pi);
+        // draw the angle dots. the angles are two sided so only need to show 0 to pi
+        float anglePercent = std::fmodf(p.angle / c_pi, 1.0f);
         int angleDotX = barStartX + int(anglePercent * float(barWidth));
         DrawCircle(pixels, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), angleDotX, angleDotY, 2, 0, color, 0);
 
@@ -761,6 +793,7 @@ int main(int argc, char** argv)
     LHS lhs_blueNoise(points, GeneratePointHashDatas_BlueNoise);
     LHS lhs_uniform(points, GeneratePointHashDatas_Uniform);
     LHS lhs_goldenRatio(points, GeneratePointHashDatas_GoldenRatio);
+    LHS lhs_goldenRatio2(points, GeneratePointHashDatas_GoldenRatio2);
 
     // do some queries
     for (int i = 0; i < 1; ++i)
@@ -775,6 +808,7 @@ int main(int argc, char** argv)
         ReportQuery(lhs_blueNoise, queryPoint, points, "blueNoise");
         ReportQuery(lhs_uniform, queryPoint, points, "uniform");
         ReportQuery(lhs_goldenRatio, queryPoint, points, "goldenRatio");
+        ReportQuery(lhs_goldenRatio2, queryPoint, points, "goldenRatio2");
     }
 
     // TODO: ground truth, how? maybe visually show points missed or something? could calculate std deviations as concentric rings.
@@ -784,6 +818,9 @@ int main(int argc, char** argv)
 
 /*
  TODO:
+* i think the footer image needs to show both a 2d plot of angle and offset, as well as the points projected onto each axis.
+* maybe golden ratio uses GR for both angle and offset, but a different random starting point for each.
+ * and make a new GR2 that uses phi_2
 * make a light image class that stores pixels, width, height
 * make the image images have a section that shows the angle and offset distribution on a number line
 * test the offset specifically, with 1 bucket and an offset. make sure it's happy :)
