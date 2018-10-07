@@ -1,11 +1,12 @@
 // Configurable settings
 #define DIMENSION()    2      // dimensionality of the data points
 #define NUMPOINTS()    1000   // the number of randomly generated (white noise) data points
-#define HASHCOUNT()    4      // how many hashes are done for each point
-#define MINHASHCOUNT() 0      // the minimum number of hash collisions that must occur for a point to be considered at all close
+#define HASHCOUNT()    8      // how many hashes are done for each point
+#define MINHASHCOUNT() 2      // the minimum number of hash collisions that must occur for a point to be considered at all close
 #define POINTDOMAIN()  5      // the coordinates go from - this value to + this value
 
-#define IMAGESIZE() 500       // the size of the image - width and height both.
+#define IMAGESIZE()       500 // the size of the image - width and height both.  T
+#define IMAGEFOOTERSIZE() 100 // the size of the "footer" under the image that shows distribution of angle and offset
 
 #define DOANGLEIMAGETEST() 1
 
@@ -71,6 +72,7 @@ struct PointHashData
 {
     std::array<float, DIMENSION()*DIMENSION()> rotation;
     float offsetX;
+    float angle; // what made the rotation matrix
 
     std::unordered_map<int, std::vector<PointID>> m_hashBuckets;
 };
@@ -185,6 +187,26 @@ std::mt19937& RNG()
 
 // -------------------------------------------------------------------------------
 
+float SimilarityScore(const PointHashData& A, const PointHashData& B)
+{
+    // TODO: need to factor in offset somehow!
+
+    // the similarity score of two rotation matrices is the Frobenius inner product.
+    // aka, sum the dot product of each of the axes
+    // https://en.wikipedia.org/wiki/Frobenius_inner_product
+    // Another way to look at this is to just pairwise multiply every value in both arrays and sum the results.
+    // since the rotations are "double sided", we need to negate one of the matrices and calculate the similarity again,
+    // and return the larger of the two (the higher similarity value).
+    // Another way we can do that is to just return the abs of the similarity.
+    float fip = 0.0f;
+    for (int i = 0; i < DIMENSION()*DIMENSION(); ++i)
+        fip += A.rotation[i] * B.rotation[i];
+
+    return std::fabsf(fip);
+}
+
+// -------------------------------------------------------------------------------
+
 void GeneratePointHashDatas_WhiteNoise(std::array<PointHashData, HASHCOUNT()>& hashDatas)
 {
     static_assert(DIMENSION() == 2, "This function only works with 2d rotation matrices");
@@ -198,6 +220,8 @@ void GeneratePointHashDatas_WhiteNoise(std::array<PointHashData, HASHCOUNT()>& h
 
         float cosTheta = std::cosf(angle);
         float sinTheta = std::sinf(angle);
+
+        p.angle = angle;
 
         p.rotation = { cosTheta, -sinTheta,
                        sinTheta,  cosTheta };
@@ -217,15 +241,13 @@ void GeneratePointHashDatas_BlueNoise(std::array<PointHashData, HASHCOUNT()>& ha
 
     for (int hashIndex = 0; hashIndex < HASHCOUNT(); ++hashIndex)
     {
-        int numCandidates = hashIndex * 20 + 1;
+        int numCandidates = hashIndex * 10 + 1;
 
         PointHashData bestPointHashData;
+        float bestPointHashDataScore;
 
         for (int candidateIndex = 0; candidateIndex < numCandidates; ++candidateIndex)
         {
-            float candidateAngle = dist_angle(RNG());
-            float candidateDistance = dist_offset(RNG());
-
             PointHashData candidatePointHashData;
 
             float angle = dist_angle(RNG());
@@ -233,24 +255,34 @@ void GeneratePointHashDatas_BlueNoise(std::array<PointHashData, HASHCOUNT()>& ha
             float cosTheta = std::cosf(angle);
             float sinTheta = std::sinf(angle);
 
+            candidatePointHashData.angle = angle;
+
             candidatePointHashData.rotation = { cosTheta, -sinTheta,
                                                 sinTheta,  cosTheta };
 
-            candidatePointHashData.offsetX = dist_offset(RNG());
+            // TODO: we need to find a way to weigh offset in the mix for SimilarityScore(). after that, make this work.
+            candidatePointHashData.offsetX = 0.0f;// dist_offset(RNG());
 
-            if (candidateIndex == 0)
+            // the score of this candidate is the most similar it is to any existing data point
+            float maxScore = 0.0f;
+            for (int dataIndex = 0; dataIndex < hashIndex; ++dataIndex)
             {
-                bestPointHashData = candidatePointHashData;
-                continue;
+                float score = SimilarityScore(candidatePointHashData, hashDatas[dataIndex]);
+                if (dataIndex == 0)
+                    maxScore = score;
+                else
+                    maxScore = std::max(score, maxScore);
             }
 
-            // TODO: take this new candidate as best if it's better than the current best
-            // Do a frobenius inner product to get an angular comparison.
-            // unsure how to combine angular and offset values into a score though.
-            // maybe put the offset off for now and just do frobenius inner product.
+            // the best candidate will have the smallest score, meaning it's least similar to all existing data points
+            if (candidateIndex == 0 || maxScore < bestPointHashDataScore)
+            {
+                bestPointHashData = candidatePointHashData;
+                bestPointHashDataScore = maxScore;
+            }
         }
 
-        // keep the best
+        // keep the best candidate found
         hashDatas[hashIndex] = bestPointHashData;
     }
 }
@@ -289,6 +321,8 @@ void GeneratePointHashDatas_Uniform(std::array<PointHashData, HASHCOUNT()>& hash
         float cosTheta = std::cosf(angle);
         float sinTheta = std::sinf(angle);
 
+        p.angle = angle;
+
         p.rotation = { cosTheta, -sinTheta,
                        sinTheta,  cosTheta };
 
@@ -319,6 +353,8 @@ void GeneratePointHashDatas_GoldenRatio(std::array<PointHashData, HASHCOUNT()>& 
 
         float cosTheta = std::cosf(angle);
         float sinTheta = std::sinf(angle);
+
+        p.angle = angle;
 
         p.rotation = { cosTheta, -sinTheta,
                        sinTheta,  cosTheta };
@@ -492,9 +528,9 @@ void ReportQueryAsImage(const LHS& lhs, const TPoint& queryPoint, const std::uno
     int circleRadius = int(float(IMAGESIZE()) / 100.0f);
     int colorCircleRadius = std::min(int(float(IMAGESIZE()) / 100.0f * 0.9f), circleRadius - 1);
 
-    // create the image and fill it with white
+    // create the image and fill it with white.
     std::vector<uint8> pixels;
-    pixels.resize(IMAGESIZE()*IMAGESIZE() * 4);
+    pixels.resize(IMAGESIZE()*(IMAGESIZE()+IMAGEFOOTERSIZE()) * 4);
     std::fill(pixels.begin(), pixels.end(), 255);
 
     // draw the hash buckets
@@ -556,7 +592,43 @@ void ReportQueryAsImage(const LHS& lhs, const TPoint& queryPoint, const std::uno
         DrawCircle(pixels, IMAGESIZE(), IMAGESIZE(), x, y, circleRadius, 0, 0, 255);
     }
 
-    stbi_write_png(fileName, IMAGESIZE(), IMAGESIZE(), 4, pixels.data(), 0);
+    // draw the footer - show the angle and offset distribution on a number line
+    DrawLine(pixels, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), 0, IMAGESIZE(), IMAGESIZE(), IMAGESIZE(), 0, 0, 0);
+    int footerStartY = IMAGESIZE();
+    int footerHeight = IMAGEFOOTERSIZE();
+    int footerMidY = footerStartY + footerHeight / 2;
+    int barStartX = IMAGESIZE() / 10;
+    int barEndX = IMAGESIZE() - barStartX;
+    int barWidth = barEndX - barStartX;
+    int barHeight = IMAGEFOOTERSIZE() / 2;
+    int barStartY = footerMidY - barHeight / 2;
+    int barEndY = barStartY + barHeight;
+    int angleDotY = footerStartY + footerHeight / 3;
+    int offsetDotY = footerStartY + 2 * footerHeight / 3;
+
+    DrawLine(pixels, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), barStartX, barStartY, barStartX, barEndY, 128, 128, 255);
+    DrawLine(pixels, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), barEndX, barStartY, barEndX, barEndY, 128, 128, 255);
+    DrawLine(pixels, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), barStartX, barEndY, barEndX, barEndY, 128, 128, 255);
+
+    // TODO: should we show reversed angle too? i kinda think we should maybe.  Or maybe should it from 0 to pi.
+    // TODO: since dots can overlap, maybe offset them on y based on hashIndex?
+    for (int hashIndex = 0; hashIndex < HASHCOUNT(); ++hashIndex)
+    {
+        const PointHashData& p = lhs.GetPointHashData(hashIndex);
+        float hashPercent = float(hashIndex) / float(HASHCOUNT() - 1);
+        uint8 color = uint8(255.0f * hashPercent);
+
+        // draw the angle dots
+        float anglePercent = p.angle / (2.0f * c_pi);
+        int angleDotX = barStartX + int(anglePercent * float(barWidth));
+        DrawCircle(pixels, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), angleDotX, angleDotY, 2, 0, color, 0);
+
+        // draw the offset dots
+        int offsetDotX = barStartX + int(p.offsetX * float(barWidth));
+        DrawCircle(pixels, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), offsetDotX, offsetDotY, 2, 0, 0, color);
+    }
+
+    pixels[3] = 0; stbi_write_png(fileName, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), 4, pixels.data(), 0);
 }
 
 // -------------------------------------------------------------------------------
@@ -659,10 +731,10 @@ void AngleImageTest()
         }
     }
 
-    stbi_write_png("out/AngleTest.png", IMAGESIZE(), IMAGESIZE(), 4, pixelsAngle.data(), 0);
-    stbi_write_png("out/AngleTestDS.png", IMAGESIZE(), IMAGESIZE(), 4, pixelsAngleDoubleSided.data(), 0);
-    stbi_write_png("out/AngleTestHalf.png", IMAGESIZE(), IMAGESIZE(), 4, pixelsHalfAngle.data(), 0);
-    stbi_write_png("out/AngleTestHalfDS.png", IMAGESIZE(), IMAGESIZE(), 4, pixelsHalfAngleDoubleSided.data(), 0);
+    pixelsAngle[3] = 0; stbi_write_png("out/AngleTest.png", IMAGESIZE(), IMAGESIZE(), 4, pixelsAngle.data(), 0);
+    pixelsAngleDoubleSided[3] = 0; stbi_write_png("out/AngleTestDS.png", IMAGESIZE(), IMAGESIZE(), 4, pixelsAngleDoubleSided.data(), 0);
+    pixelsHalfAngle[3] = 0; stbi_write_png("out/AngleTestHalf.png", IMAGESIZE(), IMAGESIZE(), 4, pixelsHalfAngle.data(), 0);
+    pixelsHalfAngleDoubleSided[3] = 0; stbi_write_png("out/AngleTestHalfDS.png", IMAGESIZE(), IMAGESIZE(), 4, pixelsHalfAngleDoubleSided.data(), 0);
 }
 
 // -------------------------------------------------------------------------------
@@ -712,12 +784,15 @@ int main(int argc, char** argv)
 
 /*
  TODO:
+* make a light image class that stores pixels, width, height
+* make the image images have a section that shows the angle and offset distribution on a number line
 * test the offset specifically, with 1 bucket and an offset. make sure it's happy :)
 * the uniform generation sucks. reconsider how to do it.
 ? are the buckets too small? i think they might be... instead of having the domain thing for points, could have a bucket size scale.
 * maybe an option to color cells based on how many hash collisions they have with the query point
-
-
+* tyler's article says there is an optimal for white noise. check out what that is, and try it? maybe compare things with that optimal value?
+* make a function to save png's, so you can put your "write a transparent pixel" code in one place :p
+* there is likely a point where white noise beats out blue / LDS. find it?
 
 Tests:
 * white noise
@@ -756,6 +831,7 @@ Notes:
 * have a white noise [0,1] random value to start golden ratio by. You get the benefits of random values i believe, like you do with white noise.
  * do you get all of them?
 * Does it make sense to do golden ratio between 0 and pi instead of 0 and 2 pi? yes. check the image tests. The angles are "double sided".
+* mitchell's best candidate algorithm for generating blue noise has a tuneable parameter. Too low and you get white noise. Too high and you get regular sampling.
 
 
 ----- LANDFILL -----
