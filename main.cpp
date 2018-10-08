@@ -6,7 +6,7 @@
 #define POINTDOMAIN()  5      // the coordinates go from - this value to + this value
 
 #define IMAGESIZE()       500 // the size of the image - width and height both.  T
-#define IMAGEFOOTERSIZE() 100 // the size of the "footer" under the image that shows distribution of angle and offset
+#define IMAGEFOOTERSIZE() 500 // the size of the "footer" under the image that shows distribution of angle and offset
 
 #define DOANGLEIMAGETEST() 1
 
@@ -367,7 +367,7 @@ void GeneratePointHashDatas_GoldenRatio(std::array<PointHashData, HASHCOUNT()>& 
 
 // -------------------------------------------------------------------------------
 
-void GeneratePointHashDatas_GoldenRatio2(std::array<PointHashData, HASHCOUNT()>& hashDatas)
+void GeneratePointHashDatas_GoldenRatioGeneralized(std::array<PointHashData, HASHCOUNT()>& hashDatas)
 {
     static_assert(DIMENSION() == 2, "This function only works with 2d rotation matrices");
 
@@ -394,6 +394,13 @@ void GeneratePointHashDatas_GoldenRatio2(std::array<PointHashData, HASHCOUNT()>&
 
         p.offsetX = std::fmodf(initialValue + float(i) * c_goldenRatio2Conjugate * c_goldenRatio2Conjugate, 1.0f);
     }
+}
+
+// -------------------------------------------------------------------------------
+void SaveImage(const char* fileName, int width, int height, uint8* pixels)
+{
+    pixels[((width*height - 1) * 4) + 3] = 0; // make the last pixel be transparent so eg twitter doesn't use jpg compression.
+    stbi_write_png(fileName, width, height, 4, pixels, 0);
 }
 
 // -------------------------------------------------------------------------------
@@ -627,40 +634,38 @@ void ReportQueryAsImage(const LHS& lhs, const TPoint& queryPoint, const std::uno
 
     // draw the footer - show the angle and offset distribution on a number line
     DrawLine(pixels, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), 0, IMAGESIZE(), IMAGESIZE(), IMAGESIZE(), 0, 0, 0);
-    int footerStartY = IMAGESIZE();
-    int footerHeight = IMAGEFOOTERSIZE();
-    int footerMidY = footerStartY + footerHeight / 2;
-    int barStartX = IMAGESIZE() / 10;
-    int barEndX = IMAGESIZE() - barStartX;
-    int barWidth = barEndX - barStartX;
-    int barHeight = IMAGEFOOTERSIZE() / 2;
-    int barStartY = footerMidY - barHeight / 2;
-    int barEndY = barStartY + barHeight;
-    int angleDotY = footerStartY + footerHeight / 3;
-    int offsetDotY = footerStartY + 2 * footerHeight / 3;
 
-    DrawLine(pixels, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), barStartX, barStartY, barStartX, barEndY, 128, 128, 255);
-    DrawLine(pixels, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), barEndX, barStartY, barEndX, barEndY, 128, 128, 255);
-    DrawLine(pixels, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), barStartX, barEndY, barEndX, barEndY, 128, 128, 255);
+    int graphSize = int(float(IMAGEFOOTERSIZE()) * 0.7f);
+    int padding = (IMAGEFOOTERSIZE() - graphSize) / 2;
 
-    // TODO: since dots can overlap, maybe offset them on y based on hashIndex?
+    DrawLine(pixels, IMAGESIZE(), IMAGESIZE()+IMAGEFOOTERSIZE(), padding, IMAGESIZE() + padding, padding + graphSize, IMAGESIZE() + padding, 128, 128, 255);
+    DrawLine(pixels, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), padding, IMAGESIZE() + padding + graphSize, padding + graphSize, IMAGESIZE() + padding + graphSize, 128, 128, 255);
+
+    DrawLine(pixels, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), padding, IMAGESIZE() + padding, padding, IMAGESIZE() + padding + graphSize, 128, 128, 255);
+    DrawLine(pixels, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), padding + graphSize, IMAGESIZE() + padding, padding + graphSize, IMAGESIZE() + padding + graphSize, 128, 128, 255);
+
     for (int hashIndex = 0; hashIndex < HASHCOUNT(); ++hashIndex)
     {
         const PointHashData& p = lhs.GetPointHashData(hashIndex);
         float hashPercent = float(hashIndex) / float(HASHCOUNT() - 1);
         uint8 color = uint8(255.0f * hashPercent);
 
-        // draw the angle dots. the angles are two sided so only need to show 0 to pi
         float anglePercent = std::fmodf(p.angle / c_pi, 1.0f);
-        int angleDotX = barStartX + int(anglePercent * float(barWidth));
-        DrawCircle(pixels, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), angleDotX, angleDotY, 2, 0, color, 0);
+        int dotX = padding + int(anglePercent * float(graphSize));
 
-        // draw the offset dots
-        int offsetDotX = barStartX + int(p.offsetX * float(barWidth));
-        DrawCircle(pixels, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), offsetDotX, offsetDotY, 2, 0, 0, color);
+        int dotY = IMAGESIZE() + padding + int(p.offsetX * float(graphSize));
+
+        // draw the 2d dots
+        DrawCircle(pixels, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), dotX, dotY, 2, 0, color, 0);
+
+        // draw the 1d angle dots to the right
+        DrawCircle(pixels, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), padding + graphSize + padding / 2, dotY, 2, 0, color, 0);
+
+        // draw the 1d offset dots below
+        DrawCircle(pixels, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), dotX, IMAGESIZE() + padding + graphSize + padding / 2, 2, 0, color, 0);
     }
 
-    pixels[3] = 0; stbi_write_png(fileName, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), 4, pixels.data(), 0);
+    SaveImage(fileName, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), pixels.data());
 }
 
 // -------------------------------------------------------------------------------
@@ -763,10 +768,10 @@ void AngleImageTest()
         }
     }
 
-    pixelsAngle[3] = 0; stbi_write_png("out/AngleTest.png", IMAGESIZE(), IMAGESIZE(), 4, pixelsAngle.data(), 0);
-    pixelsAngleDoubleSided[3] = 0; stbi_write_png("out/AngleTestDS.png", IMAGESIZE(), IMAGESIZE(), 4, pixelsAngleDoubleSided.data(), 0);
-    pixelsHalfAngle[3] = 0; stbi_write_png("out/AngleTestHalf.png", IMAGESIZE(), IMAGESIZE(), 4, pixelsHalfAngle.data(), 0);
-    pixelsHalfAngleDoubleSided[3] = 0; stbi_write_png("out/AngleTestHalfDS.png", IMAGESIZE(), IMAGESIZE(), 4, pixelsHalfAngleDoubleSided.data(), 0);
+    SaveImage("out/AngleTest.png", IMAGESIZE(), IMAGESIZE(), pixelsAngle.data());
+    SaveImage("out/AngleTestDS.png", IMAGESIZE(), IMAGESIZE(), pixelsAngleDoubleSided.data());
+    SaveImage("out/AngleTestHalf.png", IMAGESIZE(), IMAGESIZE(), pixelsHalfAngle.data());
+    SaveImage("out/AngleTestHalfDS.png", IMAGESIZE(), IMAGESIZE(), pixelsHalfAngleDoubleSided.data());
 }
 
 // -------------------------------------------------------------------------------
@@ -793,7 +798,7 @@ int main(int argc, char** argv)
     LHS lhs_blueNoise(points, GeneratePointHashDatas_BlueNoise);
     LHS lhs_uniform(points, GeneratePointHashDatas_Uniform);
     LHS lhs_goldenRatio(points, GeneratePointHashDatas_GoldenRatio);
-    LHS lhs_goldenRatio2(points, GeneratePointHashDatas_GoldenRatio2);
+    LHS lhs_goldenRatioGeneralized(points, GeneratePointHashDatas_GoldenRatioGeneralized);
 
     // do some queries
     for (int i = 0; i < 1; ++i)
@@ -808,7 +813,7 @@ int main(int argc, char** argv)
         ReportQuery(lhs_blueNoise, queryPoint, points, "blueNoise");
         ReportQuery(lhs_uniform, queryPoint, points, "uniform");
         ReportQuery(lhs_goldenRatio, queryPoint, points, "goldenRatio");
-        ReportQuery(lhs_goldenRatio2, queryPoint, points, "goldenRatio2");
+        ReportQuery(lhs_goldenRatioGeneralized, queryPoint, points, "goldenRatioGeneralized");
     }
 
     // TODO: ground truth, how? maybe visually show points missed or something? could calculate std deviations as concentric rings.
@@ -818,13 +823,12 @@ int main(int argc, char** argv)
 
 /*
  TODO:
-* i think the footer image needs to show both a 2d plot of angle and offset, as well as the points projected onto each axis.
-* maybe golden ratio uses GR for both angle and offset, but a different random starting point for each.
- * and make a new GR2 that uses phi_2
+ * tune blue noise now that you can see it plotted.
+ * 3 blue noises? 1) blue noise independant on each axis.  2) 2d blue noise. 3) projective blue noise on x and y axis. 4) ??? random axis projective blue noise?
+* uniform needs help. also i think it is incorrectly calculating how many rows it needs. set num hashes to 20 and note how it doesn't look correct.
 * make a light image class that stores pixels, width, height
-* make the image images have a section that shows the angle and offset distribution on a number line
+ * it would be neat to make a header only library for this image class and primitive drawing, for use in other blog posts too.
 * test the offset specifically, with 1 bucket and an offset. make sure it's happy :)
-* the uniform generation sucks. reconsider how to do it.
 ? are the buckets too small? i think they might be... instead of having the domain thing for points, could have a bucket size scale.
 * maybe an option to color cells based on how many hash collisions they have with the query point
 * tyler's article says there is an optimal for white noise. check out what that is, and try it? maybe compare things with that optimal value?
@@ -868,8 +872,8 @@ Notes:
 * have a white noise [0,1] random value to start golden ratio by. You get the benefits of random values i believe, like you do with white noise.
  * do you get all of them?
 * Does it make sense to do golden ratio between 0 and pi instead of 0 and 2 pi? yes. check the image tests. The angles are "double sided".
-* mitchell's best candidate algorithm for generating blue noise has a tuneable parameter. Too low and you get white noise. Too high and you get regular sampling.
-
+* mitchell's best candidate algorithm for generating blue noise has a tuneable parameter. Too low and you get white noise. Too high and you get regular sampling. not super great for getting good results out of the box.
+* generalized golden ratio doesn't look that LDS at lower hash counts, but it does at higher hash counts.  Maybe not useful since hash count should (?) always be same as # of faces on a simplex for that dimension?
 
 ----- LANDFILL -----
 
