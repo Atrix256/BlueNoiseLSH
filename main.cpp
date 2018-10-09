@@ -42,6 +42,23 @@ static const float c_goldenRatio2Conjugate = 1.0f / c_goldenRatio2;
 
 // -------------------------------------------------------------------------------
 
+struct Image
+{
+    Image(int width, int height)
+    {
+        m_width = width;
+        m_height = height;
+        m_pixels.resize(m_width*m_height * 4); // 4 channels per pixel
+        std::fill(m_pixels.begin(), m_pixels.end(), 255);
+    }
+
+    int m_width;
+    int m_height;
+    std::vector<uint8> m_pixels;
+};
+
+// -------------------------------------------------------------------------------
+
 TPoint Multiply(const TPoint& point, const std::array<float, DIMENSION()*DIMENSION()>& matrix)
 {
     TPoint ret;
@@ -397,10 +414,10 @@ void GeneratePointHashDatas_GoldenRatioGeneralized(std::array<PointHashData, HAS
 }
 
 // -------------------------------------------------------------------------------
-void SaveImage(const char* fileName, int width, int height, uint8* pixels)
+void SaveImage(const char* fileName, Image& image)
 {
-    pixels[((width*height - 1) * 4) + 3] = 0; // make the last pixel be transparent so eg twitter doesn't use jpg compression.
-    stbi_write_png(fileName, width, height, 4, pixels, 0);
+    image.m_pixels[((image.m_width*image.m_height - 1) * 4) + 3] = 0; // make the last pixel be transparent so eg twitter doesn't use jpg compression.
+    stbi_write_png(fileName, image.m_width, image.m_height, 4, image.m_pixels.data(), 0);
 }
 
 // -------------------------------------------------------------------------------
@@ -424,13 +441,13 @@ T Lerp(T A, T B, float t)
 
 // -------------------------------------------------------------------------------
 
-void DrawLine(std::vector<uint8>& pixels, int imageWidth, int imageHeight, int x1, int y1, int x2, int y2, uint8 R, uint8 G, uint8 B)
+void DrawLine(Image& image, int x1, int y1, int x2, int y2, uint8 R, uint8 G, uint8 B)
 {
     // pad the AABB of pixels we scan, to account for anti aliasing
     int startX = std::max(std::min(x1, x2) - 4, 0);
     int startY = std::max(std::min(y1, y2) - 4, 0);
-    int endX = std::min(std::max(x1, x2) + 4, imageWidth - 1);
-    int endY = std::min(std::max(y1, y2) + 4, imageHeight - 1);
+    int endX = std::min(std::max(x1, x2) + 4, image.m_width - 1);
+    int endY = std::min(std::max(y1, y2) + 4, image.m_height - 1);
 
     // if (x1,y1) is A and (x2,y2) is B, get a normalized vector from A to B called AB
     float ABX = float(x2 - x1);
@@ -442,7 +459,7 @@ void DrawLine(std::vector<uint8>& pixels, int imageWidth, int imageHeight, int x
     // scan the AABB of our line segment, drawing pixels for the line, as is appropriate
     for (int iy = startY; iy <= endY; ++iy)
     {
-        uint8* pixel = &pixels[(iy * imageWidth + startX) * 4];
+        uint8* pixel = &image.m_pixels[(iy * image.m_width + startX) * 4];
         for (int ix = startX; ix <= endX; ++ix)
         {
             // project this current pixel onto the line segment to get the closest point on the line segment to the point
@@ -476,10 +493,10 @@ void DrawLine(std::vector<uint8>& pixels, int imageWidth, int imageHeight, int x
 
 // -------------------------------------------------------------------------------
 
-void ClearImage(std::vector<uint8>& pixels, int imageWidth, int imageHeight, uint8 R, uint8 G, uint8 B)
+void ClearImage(Image& image, uint8 R, uint8 G, uint8 B)
 {
-    uint8* pixel = pixels.data();
-    for (int i = 0, c = imageWidth * imageHeight; i < c; ++i)
+    uint8* pixel = image.m_pixels.data();
+    for (int i = 0, c = image.m_width * image.m_height; i < c; ++i)
     {
         pixel[0] = R;
         pixel[1] = G;
@@ -491,17 +508,17 @@ void ClearImage(std::vector<uint8>& pixels, int imageWidth, int imageHeight, uin
 
 // -------------------------------------------------------------------------------
 
-void DrawCircle(std::vector<uint8>& pixels, int imageWidth, int imageHeight, int cx, int cy, int radius, uint8 R, uint8 G, uint8 B)
+void DrawCircle(Image& image, int cx, int cy, int radius, uint8 R, uint8 G, uint8 B)
 {
     int startX = std::max(cx - radius - 4, 0);
     int startY = std::max(cy - radius - 4, 0);
-    int endX = std::min(cx + radius + 4, imageWidth - 1);
-    int endY = std::min(cy + radius + 4, imageHeight - 1);
+    int endX = std::min(cx + radius + 4, image.m_width - 1);
+    int endY = std::min(cy + radius + 4, image.m_height - 1);
 
     for (int iy = startY; iy <= endY; ++iy)
     {
         float dy = float(cy - iy);
-        uint8* pixel = &pixels[(iy * imageWidth + startX) * 4];
+        uint8* pixel = &image.m_pixels[(iy * image.m_width + startX) * 4];
         for (int ix = startX; ix <= endX; ++ix)
         {
             float dx = float(cx - ix);
@@ -524,15 +541,15 @@ void DrawCircle(std::vector<uint8>& pixels, int imageWidth, int imageHeight, int
 
 // -------------------------------------------------------------------------------
 
-void DrawHashBuckets(std::vector<uint8>& pixels, int imageWidth, int imageHeight, float cellSize, const PointHashData& pointHashData, uint8 R, uint8 G, uint8 B)
+void DrawHashBuckets(Image& image, float cellSize, const PointHashData& pointHashData, uint8 R, uint8 G, uint8 B)
 {
-    uint8* pixel = pixels.data();
-    for (int iy = 0; iy < imageHeight; ++iy)
+    uint8* pixel = image.m_pixels.data();
+    for (int iy = 0; iy < image.m_height; ++iy)
     {
-        float posY = Lerp(-float(POINTDOMAIN()), float(POINTDOMAIN()), float(iy) / float(imageHeight));
-        for (int ix = 0; ix < imageWidth; ++ix)
+        float posY = Lerp(-float(POINTDOMAIN()), float(POINTDOMAIN()), float(iy) / float(image.m_height));
+        for (int ix = 0; ix < image.m_width; ++ix)
         {
-            float posX = Lerp(-float(POINTDOMAIN()), float(POINTDOMAIN()), float(ix) / float(imageHeight));
+            float posX = Lerp(-float(POINTDOMAIN()), float(POINTDOMAIN()), float(ix) / float(image.m_width));
 
             // transform pixel into the hash bucket space
             TPoint rawPoint = {float(posX), float(posY)};
@@ -569,15 +586,13 @@ void ReportQueryAsImage(const LHS& lhs, const TPoint& queryPoint, const std::uno
     int colorCircleRadius = std::min(int(float(IMAGESIZE()) / 100.0f * 0.9f), circleRadius - 1);
 
     // create the image and fill it with white.
-    std::vector<uint8> pixels;
-    pixels.resize(IMAGESIZE()*(IMAGESIZE()+IMAGEFOOTERSIZE()) * 4);
-    std::fill(pixels.begin(), pixels.end(), 255);
+    Image imageTop(IMAGESIZE(), IMAGESIZE());
 
     // draw the hash buckets
     for (int hashIndex = 0; hashIndex < HASHCOUNT(); ++hashIndex)
     {
         const PointHashData& pointHashData = lhs.GetPointHashData(hashIndex);
-        DrawHashBuckets(pixels, IMAGESIZE(), IMAGESIZE(), float(IMAGESIZE()) * 0.5f / float(POINTDOMAIN()), pointHashData, 192, 192, 192);
+        DrawHashBuckets(imageTop, float(IMAGESIZE()) * 0.5f / float(POINTDOMAIN()), pointHashData, 192, 192, 192);
     }
 
     // draw all the points as black dots
@@ -592,7 +607,7 @@ void ReportQueryAsImage(const LHS& lhs, const TPoint& queryPoint, const std::uno
         int x = int(p[0] * float(IMAGESIZE() - 1) + 0.5f);
         int y = int(p[1] * float(IMAGESIZE() - 1) + 0.5f);
 
-        DrawCircle(pixels, IMAGESIZE(), IMAGESIZE(), x, y, circleRadius, 0, 0, 0);
+        DrawCircle(imageTop, x, y, circleRadius, 0, 0, 0);
     }
 
     // draw the results based on their match count
@@ -615,7 +630,7 @@ void ReportQueryAsImage(const LHS& lhs, const TPoint& queryPoint, const std::uno
         float percentMatched = (float(it.second) - float(MINHASHCOUNT())) / float(HASHCOUNT() - MINHASHCOUNT());
         uint8 color = uint8(percentMatched * 255.0f);
 
-        DrawCircle(pixels, IMAGESIZE(), IMAGESIZE(), x, y, colorCircleRadius, 255, color, 0);
+        DrawCircle(imageTop, x, y, colorCircleRadius, 255, color, 0);
     }
 
     // draw the query point
@@ -629,20 +644,21 @@ void ReportQueryAsImage(const LHS& lhs, const TPoint& queryPoint, const std::uno
         int x = int(p[0] * float(IMAGESIZE() - 1) + 0.5f);
         int y = int(p[1] * float(IMAGESIZE() - 1) + 0.5f);
 
-        DrawCircle(pixels, IMAGESIZE(), IMAGESIZE(), x, y, circleRadius, 0, 0, 255);
+        DrawCircle(imageTop, x, y, circleRadius, 0, 0, 255);
     }
 
     // draw the footer - show the angle and offset distribution on a number line
-    DrawLine(pixels, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), 0, IMAGESIZE(), IMAGESIZE(), IMAGESIZE(), 0, 0, 0);
+    Image imageBottom(IMAGESIZE(), IMAGEFOOTERSIZE());
+    DrawLine(imageBottom, 0, 0, IMAGESIZE(), 0, 0, 0, 0);
 
     int graphSize = int(float(IMAGEFOOTERSIZE()) * 0.7f);
     int padding = (IMAGEFOOTERSIZE() - graphSize) / 2;
 
-    DrawLine(pixels, IMAGESIZE(), IMAGESIZE()+IMAGEFOOTERSIZE(), padding, IMAGESIZE() + padding, padding + graphSize, IMAGESIZE() + padding, 128, 128, 255);
-    DrawLine(pixels, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), padding, IMAGESIZE() + padding + graphSize, padding + graphSize, IMAGESIZE() + padding + graphSize, 128, 128, 255);
+    DrawLine(imageBottom, padding, padding, padding + graphSize, padding, 128, 128, 255);
+    DrawLine(imageBottom, padding, padding + graphSize, padding + graphSize, padding + graphSize, 128, 128, 255);
 
-    DrawLine(pixels, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), padding, IMAGESIZE() + padding, padding, IMAGESIZE() + padding + graphSize, 128, 128, 255);
-    DrawLine(pixels, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), padding + graphSize, IMAGESIZE() + padding, padding + graphSize, IMAGESIZE() + padding + graphSize, 128, 128, 255);
+    DrawLine(imageBottom, padding, padding, padding, padding + graphSize, 128, 128, 255);
+    DrawLine(imageBottom, padding + graphSize, padding, padding + graphSize, padding + graphSize, 128, 128, 255);
 
     for (int hashIndex = 0; hashIndex < HASHCOUNT(); ++hashIndex)
     {
@@ -653,19 +669,24 @@ void ReportQueryAsImage(const LHS& lhs, const TPoint& queryPoint, const std::uno
         float anglePercent = std::fmodf(p.angle / c_pi, 1.0f);
         int dotX = padding + int(anglePercent * float(graphSize));
 
-        int dotY = IMAGESIZE() + padding + int(p.offsetX * float(graphSize));
+        int dotY = padding + int(p.offsetX * float(graphSize));
 
         // draw the 2d dots
-        DrawCircle(pixels, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), dotX, dotY, 2, 0, color, 0);
+        DrawCircle(imageBottom, dotX, dotY, 2, 0, color, 0);
 
         // draw the 1d angle dots to the right
-        DrawCircle(pixels, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), padding + graphSize + padding / 2, dotY, 2, 0, color, 0);
+        DrawCircle(imageBottom, padding + graphSize + padding / 2, dotY, 2, 0, color, 0);
 
         // draw the 1d offset dots below
-        DrawCircle(pixels, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), dotX, IMAGESIZE() + padding + graphSize + padding / 2, 2, 0, color, 0);
+        DrawCircle(imageBottom, dotX, padding + graphSize + padding / 2, 2, 0, color, 0);
     }
 
-    SaveImage(fileName, IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE(), pixels.data());
+    // combine the images
+    Image image(IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE());
+    memcpy(image.m_pixels.data(), imageTop.m_pixels.data(), imageTop.m_pixels.size());
+    memcpy(&image.m_pixels[IMAGESIZE()*IMAGESIZE() * 4], imageBottom.m_pixels.data(), imageBottom.m_pixels.size());
+
+    SaveImage(fileName, image);
 }
 
 // -------------------------------------------------------------------------------
@@ -705,29 +726,21 @@ void AngleImageTest()
 {
     static const int c_numAngles = 10;
 
-    std::vector<uint8> pixelsAngle;
-    pixelsAngle.resize(IMAGESIZE()*IMAGESIZE() * 4);
-    std::fill(pixelsAngle.begin(), pixelsAngle.end(), 255);
-    DrawCircle(pixelsAngle, IMAGESIZE(), IMAGESIZE(), IMAGESIZE() / 2, IMAGESIZE() / 2, IMAGESIZE() / 2 - 2, 240, 240, 240);
-    DrawCircle(pixelsAngle, IMAGESIZE(), IMAGESIZE(), IMAGESIZE() / 2, IMAGESIZE() / 2, IMAGESIZE() / 2 - 4, 255, 255, 255);
+    Image imageAngle(IMAGESIZE(), IMAGESIZE());
+    DrawCircle(imageAngle, IMAGESIZE() / 2, IMAGESIZE() / 2, IMAGESIZE() / 2 - 2, 240, 240, 240);
+    DrawCircle(imageAngle, IMAGESIZE() / 2, IMAGESIZE() / 2, IMAGESIZE() / 2 - 4, 255, 255, 255);
 
-    std::vector<uint8> pixelsAngleDoubleSided;
-    pixelsAngleDoubleSided.resize(IMAGESIZE()*IMAGESIZE() * 4);
-    std::fill(pixelsAngleDoubleSided.begin(), pixelsAngleDoubleSided.end(), 255);
-    DrawCircle(pixelsAngleDoubleSided, IMAGESIZE(), IMAGESIZE(), IMAGESIZE() / 2, IMAGESIZE() / 2, IMAGESIZE() / 2 - 2, 240, 240, 240);
-    DrawCircle(pixelsAngleDoubleSided, IMAGESIZE(), IMAGESIZE(), IMAGESIZE() / 2, IMAGESIZE() / 2, IMAGESIZE() / 2 - 4, 255, 255, 255);
+    Image imageAngleDoubleSided(IMAGESIZE(), IMAGESIZE());
+    DrawCircle(imageAngleDoubleSided, IMAGESIZE() / 2, IMAGESIZE() / 2, IMAGESIZE() / 2 - 2, 240, 240, 240);
+    DrawCircle(imageAngleDoubleSided, IMAGESIZE() / 2, IMAGESIZE() / 2, IMAGESIZE() / 2 - 4, 255, 255, 255);
 
-    std::vector<uint8> pixelsHalfAngle;
-    pixelsHalfAngle.resize(IMAGESIZE()*IMAGESIZE() * 4);
-    std::fill(pixelsHalfAngle.begin(), pixelsHalfAngle.end(), 255);
-    DrawCircle(pixelsHalfAngle, IMAGESIZE(), IMAGESIZE(), IMAGESIZE() / 2, IMAGESIZE() / 2, IMAGESIZE() / 2 - 2, 240, 240, 240);
-    DrawCircle(pixelsHalfAngle, IMAGESIZE(), IMAGESIZE(), IMAGESIZE() / 2, IMAGESIZE() / 2, IMAGESIZE() / 2 - 4, 255, 255, 255);
+    Image imageHalfAngle(IMAGESIZE(), IMAGESIZE());
+    DrawCircle(imageHalfAngle, IMAGESIZE() / 2, IMAGESIZE() / 2, IMAGESIZE() / 2 - 2, 240, 240, 240);
+    DrawCircle(imageHalfAngle, IMAGESIZE() / 2, IMAGESIZE() / 2, IMAGESIZE() / 2 - 4, 255, 255, 255);
 
-    std::vector<uint8> pixelsHalfAngleDoubleSided;
-    pixelsHalfAngleDoubleSided.resize(IMAGESIZE()*IMAGESIZE() * 4);
-    std::fill(pixelsHalfAngleDoubleSided.begin(), pixelsHalfAngleDoubleSided.end(), 255);
-    DrawCircle(pixelsHalfAngleDoubleSided, IMAGESIZE(), IMAGESIZE(), IMAGESIZE() / 2, IMAGESIZE() / 2, IMAGESIZE() / 2 - 2, 240, 240, 240);
-    DrawCircle(pixelsHalfAngleDoubleSided, IMAGESIZE(), IMAGESIZE(), IMAGESIZE() / 2, IMAGESIZE() / 2, IMAGESIZE() / 2 - 4, 255, 255, 255);
+    Image imageHalfAngleDoubleSided(IMAGESIZE(), IMAGESIZE());
+    DrawCircle(imageHalfAngleDoubleSided, IMAGESIZE() / 2, IMAGESIZE() / 2, IMAGESIZE() / 2 - 2, 240, 240, 240);
+    DrawCircle(imageHalfAngleDoubleSided, IMAGESIZE() / 2, IMAGESIZE() / 2, IMAGESIZE() / 2 - 4, 255, 255, 255);
 
     for (int i = 0; i < c_numAngles; ++i)
     {
@@ -743,10 +756,10 @@ void AngleImageTest()
 
             uint8 color = uint8(255.0f * float(i) / float(c_numAngles));
 
-            DrawLine(pixelsAngle, IMAGESIZE(), IMAGESIZE(), IMAGESIZE() / 2, IMAGESIZE() / 2, lineEndX, lineEndY, color, color, color);
+            DrawLine(imageAngle, IMAGESIZE() / 2, IMAGESIZE() / 2, lineEndX, lineEndY, color, color, color);
 
             // also draw the double sided version
-            DrawLine(pixelsAngleDoubleSided, IMAGESIZE(), IMAGESIZE(), IMAGESIZE() - lineEndX, IMAGESIZE() - lineEndY, lineEndX, lineEndY, color, color, color);
+            DrawLine(imageAngleDoubleSided, IMAGESIZE() - lineEndX, IMAGESIZE() - lineEndY, lineEndX, lineEndY, color, color, color);
         }
 
         // use golden ratio to make angles between 0 and pi
@@ -761,17 +774,17 @@ void AngleImageTest()
 
             uint8 color = uint8(255.0f * float(i) / float(c_numAngles));
 
-            DrawLine(pixelsHalfAngle, IMAGESIZE(), IMAGESIZE(), IMAGESIZE() / 2, IMAGESIZE() / 2, lineEndX, lineEndY, color, color, color);
+            DrawLine(imageHalfAngle, IMAGESIZE() / 2, IMAGESIZE() / 2, lineEndX, lineEndY, color, color, color);
 
             // also draw the double sided version
-            DrawLine(pixelsHalfAngleDoubleSided, IMAGESIZE(), IMAGESIZE(), IMAGESIZE() - lineEndX, IMAGESIZE() - lineEndY, lineEndX, lineEndY, color, color, color);
+            DrawLine(imageHalfAngleDoubleSided, IMAGESIZE() - lineEndX, IMAGESIZE() - lineEndY, lineEndX, lineEndY, color, color, color);
         }
     }
 
-    SaveImage("out/AngleTest.png", IMAGESIZE(), IMAGESIZE(), pixelsAngle.data());
-    SaveImage("out/AngleTestDS.png", IMAGESIZE(), IMAGESIZE(), pixelsAngleDoubleSided.data());
-    SaveImage("out/AngleTestHalf.png", IMAGESIZE(), IMAGESIZE(), pixelsHalfAngle.data());
-    SaveImage("out/AngleTestHalfDS.png", IMAGESIZE(), IMAGESIZE(), pixelsHalfAngleDoubleSided.data());
+    SaveImage("out/AngleTest.png", imageAngle);
+    SaveImage("out/AngleTestDS.png", imageAngleDoubleSided);
+    SaveImage("out/AngleTestHalf.png", imageHalfAngle);
+    SaveImage("out/AngleTestHalfDS.png", imageHalfAngleDoubleSided);
 }
 
 // -------------------------------------------------------------------------------
