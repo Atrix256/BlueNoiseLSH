@@ -229,8 +229,6 @@ float SimilarityScore(const PointHashData& A, const PointHashData& B)
 
 void GeneratePointHashDatas_WhiteNoise(std::array<PointHashData, HASHCOUNT()>& hashDatas)
 {
-    static_assert(DIMENSION() == 2, "This function only works with 2d rotation matrices");
-
     std::uniform_real_distribution<float> dist_angle(0.0f, 2.0f * c_pi);
     std::uniform_real_distribution<float> dist_offset(0.0f, 1.0f);
 
@@ -252,58 +250,151 @@ void GeneratePointHashDatas_WhiteNoise(std::array<PointHashData, HASHCOUNT()>& h
 
 // -------------------------------------------------------------------------------
 
-void GeneratePointHashDatas_BlueNoise(std::array<PointHashData, HASHCOUNT()>& hashDatas)
+template <typename T, typename LAMBDA1, typename LAMBDA2>
+void MitchelsBestCandidateAlgorithm (std::vector<T>& results, int desiredItemCount, int candidateMultiplier, const LAMBDA2& GenerateRandomCandidate, const LAMBDA1& DifferenceScoreCalculator)
 {
-    static_assert(DIMENSION() == 2, "This function only works with 2d rotation matrices");
+    results.resize(desiredItemCount);
 
-    std::uniform_real_distribution<float> dist_angle(0.0f, 2.0f * c_pi);
-    std::uniform_real_distribution<float> dist_offset(0.0f, 1.0f);
-
-    for (int hashIndex = 0; hashIndex < HASHCOUNT(); ++hashIndex)
+    // for each item we need to fill in
+    for (int itemIndex = 0; itemIndex < desiredItemCount; ++itemIndex)
     {
-        int numCandidates = hashIndex * 10 + 1;
+        // calculate how many candidates we want to generate for this item
+        int candidateCount = itemIndex * candidateMultiplier + 1;
 
-        PointHashData bestPointHashData;
-        float bestPointHashDataScore;
+        T bestCandidate;
+        float bestCandidateMinimumDifferenceScore;
 
-        for (int candidateIndex = 0; candidateIndex < numCandidates; ++candidateIndex)
+        // for each candidate
+        for (int candidateIndex = 0; candidateIndex < candidateCount; ++candidateIndex)
         {
-            PointHashData candidatePointHashData;
+            // make a randomized candidate
+            T candidate = GenerateRandomCandidate();
+            float minimumDifferenceScore = FLT_MAX;
 
-            float angle = dist_angle(RNG());
-
-            float cosTheta = std::cosf(angle);
-            float sinTheta = std::sinf(angle);
-
-            candidatePointHashData.angle = angle;
-
-            candidatePointHashData.rotation = { cosTheta, -sinTheta,
-                                                sinTheta,  cosTheta };
-
-            // TODO: we need to find a way to weigh offset in the mix for SimilarityScore(). after that, make this work.
-            candidatePointHashData.offsetX = dist_offset(RNG());
-
-            // the score of this candidate is the most similar it is to any existing data point
-            float maxScore = 0.0f;
-            for (int dataIndex = 0; dataIndex < hashIndex; ++dataIndex)
+            // the score of this candidate is the minimum difference from all existing items
+            for (int checkItemIndex = 0; checkItemIndex < itemIndex; ++checkItemIndex)
             {
-                float score = SimilarityScore(candidatePointHashData, hashDatas[dataIndex]);
-                if (dataIndex == 0)
-                    maxScore = score;
-                else
-                    maxScore = std::max(score, maxScore);
+                float differenceScore = DifferenceScoreCalculator(candidate, results[checkItemIndex]);
+                minimumDifferenceScore = std::min(minimumDifferenceScore, differenceScore);
             }
 
-            // the best candidate will have the smallest score, meaning it's least similar to all existing data points
-            if (candidateIndex == 0 || maxScore < bestPointHashDataScore)
+            // the candidate with the largest minimum distance is the one we want to keep
+            if (candidateIndex == 0 || minimumDifferenceScore > bestCandidateMinimumDifferenceScore)
             {
-                bestPointHashData = candidatePointHashData;
-                bestPointHashDataScore = maxScore;
+                bestCandidate = candidate;
+                bestCandidateMinimumDifferenceScore = minimumDifferenceScore;
             }
         }
 
-        // keep the best candidate found
-        hashDatas[hashIndex] = bestPointHashData;
+        // keep the winning candidate
+        results[itemIndex] = bestCandidate;
+    }
+}
+
+// -------------------------------------------------------------------------------
+
+void GeneratePointHashDatas_BlueNoise_IndependantAxes(std::array<PointHashData, HASHCOUNT()>& hashDatas)
+{
+    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+
+    std::vector<float> angles, offsets;
+
+    MitchelsBestCandidateAlgorithm(
+        angles,
+        HASHCOUNT(),
+        5,
+        [&]()
+        {
+            return dist(RNG());
+        },
+        [](const float& A, const float& B)
+        {
+            float diff = fabsf(B - A);
+            if (diff > 0.5f)
+                diff = 1.0f - diff;
+            return diff;
+        }
+    );
+
+    MitchelsBestCandidateAlgorithm(
+        offsets,
+        HASHCOUNT(),
+        5,
+        [&]()
+        {
+            return dist(RNG());
+        },
+        [](const float& A, const float& B)
+        {
+            float diff = fabsf(B - A);
+            if (diff > 0.5f)
+                diff = 1.0f - diff;
+            return diff;
+        }
+    );
+
+    for (int hashIndex = 0; hashIndex < HASHCOUNT(); ++hashIndex)
+    {
+        float angle = angles[hashIndex] * c_pi;
+
+        float cosTheta = std::cosf(angle);
+        float sinTheta = std::sinf(angle);
+
+        hashDatas[hashIndex].angle = angle;
+
+        hashDatas[hashIndex].rotation = { cosTheta, -sinTheta,
+                                          sinTheta,  cosTheta };
+
+        hashDatas[hashIndex].offsetX = offsets[hashIndex];
+    }
+}
+
+// -------------------------------------------------------------------------------
+
+void GeneratePointHashDatas_BlueNoise_2D(std::array<PointHashData, HASHCOUNT()>& hashDatas)
+{
+    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+
+    std::vector<TPoint> points;
+
+    MitchelsBestCandidateAlgorithm(
+        points,
+        HASHCOUNT(),
+        5,
+        [&]()
+        {
+            TPoint ret;
+            for (int i = 0; i < DIMENSION(); ++i)
+                ret[i] = dist(RNG());
+            return ret;
+        },
+        [](const TPoint& A, const TPoint& B)
+        {
+            float distSq = 0.0f;
+            for (int i = 0; i < DIMENSION(); ++i)
+            {
+                float diff = fabsf(B[i] - A[i]);
+                if (diff > 0.5f)
+                    diff = 1.0f - diff;
+                distSq += diff * diff;
+            }
+            return distSq;
+        }
+    );
+
+    for (int hashIndex = 0; hashIndex < HASHCOUNT(); ++hashIndex)
+    {
+        float angle = points[hashIndex][0] * c_pi;
+
+        float cosTheta = std::cosf(angle);
+        float sinTheta = std::sinf(angle);
+
+        hashDatas[hashIndex].angle = angle;
+
+        hashDatas[hashIndex].rotation = { cosTheta, -sinTheta,
+                                          sinTheta,  cosTheta };
+
+        hashDatas[hashIndex].offsetX = points[hashIndex][1];
     }
 }
 
@@ -311,29 +402,18 @@ void GeneratePointHashDatas_BlueNoise(std::array<PointHashData, HASHCOUNT()>& ha
 
 void GeneratePointHashDatas_Uniform(std::array<PointHashData, HASHCOUNT()>& hashDatas)
 {
-    static_assert(DIMENSION() == 2, "This function only works with 2d rotation matrices");
-
-    // To sample evenly across the two dimensional space of angle and offset, we are going to treat it as a square
-    // of dimensions (1,1) that we need to place HASHCOUNT() points in uniformly.
-    // So, we need to calculate the number of rows and columns we'll need.
-    // The number after each square (power of 2) number of points is when a new row is going to be added.
-    // So, rows == columns == ceil(sqrt(HASHCOUNT()).
-    // This would generalize to higher dimensions, replacing sqrt with the appropriate root
-
-    // TODO: how to deal with the remainder? I guess you could choose a row or column and re-center them on that axis. is that most uniform?
-    // TODO: do we want to treat each axis equally? if not, would need to adjust the calculation somehow.
-
-    int size = int(ceilf(sqrtf(float(HASHCOUNT()))));
+    int columns = int(ceilf(sqrtf(float(HASHCOUNT()))));
+    int rows = int(ceilf(float(HASHCOUNT()) / float(columns)));
 
     for (int i = 0; i < HASHCOUNT(); ++i)
     {
         PointHashData& p = hashDatas[i];
 
-        int x = i % size;
-        int y = i / size;
+        int x = i % columns;
+        int y = i / columns;
 
-        float percentX = (float(x) + 0.5f) / float(size);
-        float percentY = (float(y) + 0.5f) / float(size);
+        float percentX = (float(x) + 0.5f) / float(columns);
+        float percentY = (float(y) + 0.5f) / float(rows);
 
         // choose an angle from 0 to 180 degrees, because angle > 180 degrees is redundant.
         float angle = percentX * c_pi;
@@ -354,8 +434,6 @@ void GeneratePointHashDatas_Uniform(std::array<PointHashData, HASHCOUNT()>& hash
 
 void GeneratePointHashDatas_GoldenRatio(std::array<PointHashData, HASHCOUNT()>& hashDatas)
 {
-    static_assert(DIMENSION() == 2, "This function only works with 2d rotation matrices");
-
     std::uniform_real_distribution<float> dist(0.0f, 1.0f);
 
     float initialValueAngle = dist(RNG());
@@ -386,8 +464,6 @@ void GeneratePointHashDatas_GoldenRatio(std::array<PointHashData, HASHCOUNT()>& 
 
 void GeneratePointHashDatas_GoldenRatioGeneralized(std::array<PointHashData, HASHCOUNT()>& hashDatas)
 {
-    static_assert(DIMENSION() == 2, "This function only works with 2d rotation matrices");
-
     std::uniform_real_distribution<float> dist(0.0f, 1.0f);
 
     float initialValue = dist(RNG());
@@ -577,8 +653,6 @@ void DrawHashBuckets(Image& image, float cellSize, const PointHashData& pointHas
 
 void ReportQueryAsImage(const LHS& lhs, const TPoint& queryPoint, const std::unordered_map<PointID, int>& results, const std::vector<TPoint>& points, const char* name)
 {
-    static_assert(DIMENSION() == 2, "This function only works with 2d points");
-
     char fileName[256];
     sprintf_s(fileName, "out/%s.png", name);
 
@@ -808,7 +882,8 @@ int main(int argc, char** argv)
 
     // add the points to the locality sensitive hashing
     LHS lhs_whiteNoise(points, GeneratePointHashDatas_WhiteNoise);
-    LHS lhs_blueNoise(points, GeneratePointHashDatas_BlueNoise);
+    LHS lhs_blueNoise_independantAxes(points, GeneratePointHashDatas_BlueNoise_IndependantAxes);
+    LHS lhs_blueNoise_2D(points, GeneratePointHashDatas_BlueNoise_2D);
     LHS lhs_uniform(points, GeneratePointHashDatas_Uniform);
     LHS lhs_goldenRatio(points, GeneratePointHashDatas_GoldenRatio);
     LHS lhs_goldenRatioGeneralized(points, GeneratePointHashDatas_GoldenRatioGeneralized);
@@ -823,7 +898,8 @@ int main(int argc, char** argv)
         printfPoint("Query Point", queryPoint);
 
         ReportQuery(lhs_whiteNoise, queryPoint, points, "whiteNoise");
-        ReportQuery(lhs_blueNoise, queryPoint, points, "blueNoise");
+        ReportQuery(lhs_blueNoise_independantAxes, queryPoint, points, "blueNoise_ia");
+        ReportQuery(lhs_blueNoise_2D, queryPoint, points, "blueNoise_2d");
         ReportQuery(lhs_uniform, queryPoint, points, "uniform");
         ReportQuery(lhs_goldenRatio, queryPoint, points, "goldenRatio");
         ReportQuery(lhs_goldenRatioGeneralized, queryPoint, points, "goldenRatioGeneralized");
@@ -838,15 +914,13 @@ int main(int argc, char** argv)
  TODO:
  * tune blue noise now that you can see it plotted.
  * 3 blue noises? 1) blue noise independant on each axis.  2) 2d blue noise. 3) projective blue noise on x and y axis. 4) ??? random axis projective blue noise?
-* uniform needs help. also i think it is incorrectly calculating how many rows it needs. set num hashes to 20 and note how it doesn't look correct.
-* make a light image class that stores pixels, width, height
- * it would be neat to make a header only library for this image class and primitive drawing, for use in other blog posts too.
-* test the offset specifically, with 1 bucket and an offset. make sure it's happy :)
 ? are the buckets too small? i think they might be... instead of having the domain thing for points, could have a bucket size scale.
 * maybe an option to color cells based on how many hash collisions they have with the query point
 * tyler's article says there is an optimal for white noise. check out what that is, and try it? maybe compare things with that optimal value?
-* make a function to save png's, so you can put your "write a transparent pixel" code in one place :p
 * there is likely a point where white noise beats out blue / LDS. find it?
+* maybe try halton or something
+* maybe try that "low discrepancy blue noise" thing?
+* check through the code. maybe delete things you don't need naymore?
 
 Tests:
 * white noise
@@ -870,6 +944,8 @@ Tests:
 
 * there was also a technique talked about
 
+* maybe do 1d integration and compare blue noise, white noise, lds?
+ * to show that blue noise has same error decay as white noise but starts lower?
 
 Links:
 - inspiration: http://unboxresearch.com/articles/lsh_post1.html   aka http://unboxresearch.com/articles/lsh_post1.html
