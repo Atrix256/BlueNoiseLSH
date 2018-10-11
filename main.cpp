@@ -293,7 +293,7 @@ void MitchelsBestCandidateAlgorithm (std::vector<T>& results, int desiredItemCou
 
 // -------------------------------------------------------------------------------
 
-void GeneratePointHashDatas_BlueNoise_IndependantAxes(std::array<PointHashData, HASHCOUNT()>& hashDatas)
+void GeneratePointHashDatas_BlueNoise_1d(std::array<PointHashData, HASHCOUNT()>& hashDatas)
 {
     std::uniform_real_distribution<float> dist(0.0f, 1.0f);
 
@@ -379,6 +379,86 @@ void GeneratePointHashDatas_BlueNoise_2D(std::array<PointHashData, HASHCOUNT()>&
                 distSq += diff * diff;
             }
             return distSq;
+        }
+    );
+
+    for (int hashIndex = 0; hashIndex < HASHCOUNT(); ++hashIndex)
+    {
+        float angle = points[hashIndex][0] * c_pi;
+
+        float cosTheta = std::cosf(angle);
+        float sinTheta = std::sinf(angle);
+
+        hashDatas[hashIndex].angle = angle;
+
+        hashDatas[hashIndex].rotation = { cosTheta, -sinTheta,
+                                          sinTheta,  cosTheta };
+
+        hashDatas[hashIndex].offsetX = points[hashIndex][1];
+    }
+}
+
+// -------------------------------------------------------------------------------
+
+void GeneratePointHashDatas_BlueNoise_2DProjective(std::array<PointHashData, HASHCOUNT()>& hashDatas)
+{
+    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+
+    std::vector<TPoint> points;
+
+    MitchelsBestCandidateAlgorithm(
+        points,
+        HASHCOUNT(),
+        20,
+        [&]()
+        {
+            TPoint ret;
+            for (int i = 0; i < DIMENSION(); ++i)
+                ret[i] = dist(RNG());
+            return ret;
+        },
+        [](const TPoint& A, const TPoint& B)
+        {
+            float distance = 0.0f;
+
+            // 2d distance
+            {
+                float distSq = 0.0f;
+                for (int i = 0; i < DIMENSION(); ++i)
+                {
+                    float diff = fabsf(B[i] - A[i]);
+                    if (diff > 0.5f)
+                        diff = 1.0f - diff;
+                    distSq += diff * diff;
+                }
+                distance = sqrtf(distSq);
+            }
+
+            // 1d distance. scaled by 1 / sqrt(2)
+            {
+                // TODO: if this works, update the comment above and the notes
+                float multiplier = 1.0f / sqrtf(2.0f);
+
+                //float multiplier1d = 1.0f / 2.0f;
+                //float multiplier2d = sqrtf(1.0f / (2.0f * sqrtf(3.0)));
+                //float multiplier = multiplier1d / multiplier2d;
+
+                for (int i = 0; i < DIMENSION(); ++i)
+                {
+                    float dist1d = fabsf(B[i] - A[i]);
+                    if (dist1d > 0.5f)
+                        dist1d = 1.0f - dist1d;
+                    dist1d /= multiplier;  // TODO: note this is a divide not a multiply!
+                    distance = std::min(distance, dist1d);
+
+                    // TODO: i think minimum distance to point could be appropriate, because a candidate's score is the minimum distance to an existing point anyways. This is a "per sub space" minimum.
+                    // TODO: not 100% sure though. it does sometimes seem like it should be considering all axes simultanesouly in a score like addition would do? maybe not though
+
+                    //distance += dist1d;
+                }
+            }
+
+            return distance;
         }
     );
 
@@ -882,8 +962,9 @@ int main(int argc, char** argv)
 
     // add the points to the locality sensitive hashing
     LHS lhs_whiteNoise(points, GeneratePointHashDatas_WhiteNoise);
-    LHS lhs_blueNoise_independantAxes(points, GeneratePointHashDatas_BlueNoise_IndependantAxes);
+    LHS lhs_blueNoise_1d(points, GeneratePointHashDatas_BlueNoise_1d);
     LHS lhs_blueNoise_2D(points, GeneratePointHashDatas_BlueNoise_2D);
+    LHS lhs_blueNoise_2DProjective(points, GeneratePointHashDatas_BlueNoise_2DProjective);
     LHS lhs_uniform(points, GeneratePointHashDatas_Uniform);
     LHS lhs_goldenRatio(points, GeneratePointHashDatas_GoldenRatio);
     LHS lhs_goldenRatioGeneralized(points, GeneratePointHashDatas_GoldenRatioGeneralized);
@@ -898,8 +979,9 @@ int main(int argc, char** argv)
         printfPoint("Query Point", queryPoint);
 
         ReportQuery(lhs_whiteNoise, queryPoint, points, "whiteNoise");
-        ReportQuery(lhs_blueNoise_independantAxes, queryPoint, points, "blueNoise_ia");
+        ReportQuery(lhs_blueNoise_1d, queryPoint, points, "blueNoise_1d");
         ReportQuery(lhs_blueNoise_2D, queryPoint, points, "blueNoise_2d");
+        ReportQuery(lhs_blueNoise_2DProjective, queryPoint, points, "blueNoise_2dProjective");
         ReportQuery(lhs_uniform, queryPoint, points, "uniform");
         ReportQuery(lhs_goldenRatio, queryPoint, points, "goldenRatio");
         ReportQuery(lhs_goldenRatioGeneralized, queryPoint, points, "goldenRatioGeneralized");
@@ -921,6 +1003,9 @@ int main(int argc, char** argv)
 * maybe try halton or something
 * maybe try that "low discrepancy blue noise" thing?
 * check through the code. maybe delete things you don't need naymore?
+* find out how to do n Owen-scrambled Sobol. maybe would be the ideal thing?
+
+
 
 Tests:
 * white noise
@@ -942,10 +1027,9 @@ Tests:
  * the paper from tyler sort of mentions a bloom filter related thing: "if we’re willing to probabilistically verify hash keys at the cost of some false collisions, we can still achieve O(d log d) lookups" 
  * basically, if you get hashed items, you need to resolve them to points which takes longer. if you work only w/ hashes you can get false positives but it's faster. A bit bloom filter ish.
 
-* there was also a technique talked about
-
 * maybe do 1d integration and compare blue noise, white noise, lds?
  * to show that blue noise has same error decay as white noise but starts lower?
+ * could compare to owen scrambled sobol, and low discrepancy blue noise sampling.
 
 Links:
 - inspiration: http://unboxresearch.com/articles/lsh_post1.html   aka http://unboxresearch.com/articles/lsh_post1.html
@@ -956,6 +1040,8 @@ Links:
 - maybe some blue noise articles?
 * frobenius inner product for checking similarity of rotation matrices: https://en.wikipedia.org/wiki/Frobenius_inner_product
 * random rotation matrices: https://en.wikipedia.org/wiki/Rotation_matrix#Uniform_random_rotation_matrices
+* lattice based LHSs are apparently optimal: https://arxiv.org/pdf/1712.08558.pdf
+* projective blue noise: http://resources.mpi-inf.mpg.de/ProjectiveBlueNoise/ProjectiveBlueNoise.pdf
 
 Notes:
 * have a white noise [0,1] random value to start golden ratio by. You get the benefits of random values i believe, like you do with white noise.
@@ -963,6 +1049,10 @@ Notes:
 * Does it make sense to do golden ratio between 0 and pi instead of 0 and 2 pi? yes. check the image tests. The angles are "double sided".
 * mitchell's best candidate algorithm for generating blue noise has a tuneable parameter. Too low and you get white noise. Too high and you get regular sampling. not super great for getting good results out of the box.
 * generalized golden ratio doesn't look that LDS at lower hash counts, but it does at higher hash counts.  Maybe not useful since hash count should (?) always be same as # of faces on a simplex for that dimension?
+* projective blue noise: I'm counting single axis distances to be worth as much as 1/sqrt(2) the 2d distance.
+ * if i were doing 3d points, and looking at a 2d subspace i would count the 2d distances as sqrt(2)/sqrt(3).
+ * if i were doing 3d points, and looking at a 1d subspace, i would count the 1d distances as 1/sqrt(3).
+ * the projective blue noise paper uses sphere packing for specific number of points, which doesn't quite translate to best candidate.
 
 ----- LANDFILL -----
 
