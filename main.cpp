@@ -250,29 +250,9 @@ void GeneratePointHashDatas_WhiteNoise(std::array<PointHashData, HASHCOUNT()>& h
 
 // -------------------------------------------------------------------------------
 
-/*
-
-Dim Scores Formula
-------------------------
-1   1      1
-2   3      1 + 2 * 1
-3   10     1 + 3 * 3
-4   41     1 + 4 * 10
-5   206    1 + 5 * 41
-
-aka:
-Scores(dimension) = 1 + dimension * scores(dimension-1)
-
-// TODO: the above might not be right. i think it's actually just 2^(dimension)-1.
-
-*/
-
 template <typename T, typename LAMBDA1, typename LAMBDA2>
 void AlansGoodCandidateAlgorithm(std::vector<T>& results, int desiredItemCount, int candidateMultiplier, const LAMBDA2& GenerateRandomCandidate, const LAMBDA1& DifferenceScoreCalculator)
 {
-    // TODO: generalize it eventually but get it working for 2 dimensions for now.
-    static_assert(DIMENSION() == 2, "This assumes 2d points for now");
-
     // map candidate index to score
     struct CandidateScore
     {
@@ -281,23 +261,34 @@ void AlansGoodCandidateAlgorithm(std::vector<T>& results, int desiredItemCount, 
     };
     typedef std::vector<CandidateScore> CandidateScores;
     static const size_t c_numScores = (1 << DIMENSION()) - 1;  // 2^(dimension)-1
-    typedef std::array<CandidateScores, c_numScores> AllCandidateScores;
 
+    // make space for the results
     results.resize(desiredItemCount);
 
     // for each item we need to fill in
     for (int itemIndex = 0; itemIndex < desiredItemCount; ++itemIndex)
     {
-        AllCandidateScores scores;
-        std::vector<T> candidates;
-
         // calculate how many candidates we want to generate for this item
         int candidateCount = itemIndex * candidateMultiplier + 1;
 
         // generate the candidates
+        std::vector<T> candidates;
         candidates.resize(candidateCount);
         for (T& candidate : candidates)
             candidate = GenerateRandomCandidate();
+
+        // initialize the overall scores
+        CandidateScores overallScores;
+        overallScores.resize(candidateCount);
+        for (int candidateIndex = 0; candidateIndex < candidateCount; ++candidateIndex)
+        {
+            overallScores[candidateIndex].index = candidateIndex;
+            overallScores[candidateIndex].score = 0.0f;
+        }
+
+        // allocate space for the individual scores
+        CandidateScores scores;
+        scores.resize(candidateCount);
 
         // score the candidates by each measure of scoring
         for (size_t scoreIndex = 0; scoreIndex < c_numScores; ++scoreIndex)
@@ -316,27 +307,37 @@ void AlansGoodCandidateAlgorithm(std::vector<T>& results, int desiredItemCount, 
                     minimumDifferenceScore = std::min(minimumDifferenceScore, differenceScore);
                 }
 
-                scores[scoreIndex].push_back({ candidateIndex, minimumDifferenceScore });
+                scores[candidateIndex].index = candidateIndex;
+                scores[candidateIndex].score = minimumDifferenceScore;
             }
-
-            int ijklz = 0;
 
             // sort the scores from high to low
             std::sort(
-                scores[scoreIndex].begin(),
-                scores[scoreIndex].end(),
+                scores.begin(),
+                scores.end(),
                 [] (const CandidateScore& A, const CandidateScore& B)
                 {
                     return A.score > B.score;
                 }
             );
 
-            int ijkl = 0;
+            // add the rank of this score a score for each candidate
+            for (size_t candidateIndex = 0; candidateIndex < candidateCount; ++candidateIndex)
+                overallScores[scores[candidateIndex].index].score += float(candidateIndex);
         }
 
-        // TODO: choose the best one you can find.
-        results[itemIndex] = candidates[0];
+        // sort the overall scores from low to high
+        std::sort(
+            overallScores.begin(),
+            overallScores.end(),
+            [] (const CandidateScore& A, const CandidateScore& B)
+            {
+                return A.score < B.score;
+            }
+        );
 
+        // keep the point that had the lowest summed rank
+        results[itemIndex] = candidates[overallScores[0].index];
     }
 }
 
@@ -498,6 +499,21 @@ void GeneratePointHashDatas_BlueNoise_2DProjective(std::array<PointHashData, HAS
 
     std::vector<TPoint> points;
 
+    static const size_t c_numScores = (1 << DIMENSION()) - 1;
+    TPoint axisMasks[c_numScores];
+    for (size_t i = 1; i <= c_numScores; ++i)
+    {
+        TPoint& axisMask = axisMasks[i - 1];
+
+        for (size_t j = 0; j < DIMENSION(); ++j)
+        {
+            if (i & (size_t(1) << j))
+                axisMask[j] = 1.0f;
+            else
+                axisMask[j] = 0.0f;
+        }
+    }
+
     AlansGoodCandidateAlgorithm(
         points,
         HASHCOUNT(),
@@ -509,51 +525,19 @@ void GeneratePointHashDatas_BlueNoise_2DProjective(std::array<PointHashData, HAS
                 ret[i] = dist(RNG());
             return ret;
         },
-        [](const TPoint& A, const TPoint& B, size_t scoreIndex)
+        [&](const TPoint& A, const TPoint& B, size_t scoreIndex)
         {
-            // TODO: use the bits in the score index as an axis mask! maybe make the axis masks in advance in this function and use scoreIndex as an index into that.
-            // TODO: hadamard product when multiplying vectors component wise
+            const TPoint& axisMask = axisMasks[scoreIndex];
 
-            float distance = 0.0f;
-
-            // 2d distance
+            float distSq = 0.0f;
+            for (int i = 0; i < DIMENSION(); ++i)
             {
-                float distSq = 0.0f;
-                for (int i = 0; i < DIMENSION(); ++i)
-                {
-                    float diff = fabsf(B[i] - A[i]);
-                    if (diff > 0.5f)
-                        diff = 1.0f - diff;
-                    distSq += diff * diff;
-                }
-                distance = sqrtf(distSq);
+                float diff = fabsf(B[i] - A[i]) * axisMask[i];
+                if (diff > 0.5f)
+                    diff = 1.0f - diff;
+                distSq += diff * diff;
             }
-
-            // 1d distance. scaled by 1 / sqrt(2)
-            {
-                // TODO: if this works, update the comment above and the notes
-                float multiplier = 1.0f / sqrtf(2.0f);
-
-                //float multiplier1d = 1.0f / 2.0f;
-                //float multiplier2d = sqrtf(1.0f / (2.0f * sqrtf(3.0)));
-                //float multiplier = multiplier1d / multiplier2d;
-
-                for (int i = 0; i < DIMENSION(); ++i)
-                {
-                    float dist1d = fabsf(B[i] - A[i]);
-                    if (dist1d > 0.5f)
-                        dist1d = 1.0f - dist1d;
-                    dist1d /= multiplier;  // TODO: note this is a divide not a multiply!
-                    distance = std::min(distance, dist1d);
-
-                    // TODO: i think minimum distance to point could be appropriate, because a candidate's score is the minimum distance to an existing point anyways. This is a "per sub space" minimum.
-                    // TODO: not 100% sure though. it does sometimes seem like it should be considering all axes simultanesouly in a score like addition would do? maybe not though
-
-                    //distance += dist1d;
-                }
-            }
-
-            return distance;
+            return sqrtf(distSq);
         }
     );
 
@@ -1099,7 +1083,7 @@ int main(int argc, char** argv)
 * maybe try that "low discrepancy blue noise" thing?
 * check through the code. maybe delete things you don't need naymore?
 * find out how to do n Owen-scrambled Sobol. maybe would be the ideal thing?
-
+* should probably show DFT of point distribution
 
 
 Tests:
