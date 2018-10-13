@@ -250,6 +250,98 @@ void GeneratePointHashDatas_WhiteNoise(std::array<PointHashData, HASHCOUNT()>& h
 
 // -------------------------------------------------------------------------------
 
+/*
+
+Dim Scores Formula
+------------------------
+1   1      1
+2   3      1 + 2 * 1
+3   10     1 + 3 * 3
+4   41     1 + 4 * 10
+5   206    1 + 5 * 41
+
+aka:
+Scores(dimension) = 1 + dimension * scores(dimension-1)
+
+// TODO: the above might not be right. i think it's actually just 2^(dimension)-1.
+
+*/
+
+template <typename T, typename LAMBDA1, typename LAMBDA2>
+void AlansGoodCandidateAlgorithm(std::vector<T>& results, int desiredItemCount, int candidateMultiplier, const LAMBDA2& GenerateRandomCandidate, const LAMBDA1& DifferenceScoreCalculator)
+{
+    // TODO: generalize it eventually but get it working for 2 dimensions for now.
+    static_assert(DIMENSION() == 2, "This assumes 2d points for now");
+
+    // map candidate index to score
+    struct CandidateScore
+    {
+        size_t index;
+        float score;
+    };
+    typedef std::vector<CandidateScore> CandidateScores;
+    static const size_t c_numScores = (1 << DIMENSION()) - 1;  // 2^(dimension)-1
+    typedef std::array<CandidateScores, c_numScores> AllCandidateScores;
+
+    results.resize(desiredItemCount);
+
+    // for each item we need to fill in
+    for (int itemIndex = 0; itemIndex < desiredItemCount; ++itemIndex)
+    {
+        AllCandidateScores scores;
+        std::vector<T> candidates;
+
+        // calculate how many candidates we want to generate for this item
+        int candidateCount = itemIndex * candidateMultiplier + 1;
+
+        // generate the candidates
+        candidates.resize(candidateCount);
+        for (T& candidate : candidates)
+            candidate = GenerateRandomCandidate();
+
+        // score the candidates by each measure of scoring
+        for (size_t scoreIndex = 0; scoreIndex < c_numScores; ++scoreIndex)
+        {
+            // for each candidate in this score index...
+            for (size_t candidateIndex = 0; candidateIndex < candidateCount; ++candidateIndex)
+            {
+                const T& candidate = candidates[candidateIndex];
+
+                // calculate the score of the candidate.
+                // the score is the minimum distance to any other points
+                float minimumDifferenceScore = FLT_MAX;
+                for (int checkItemIndex = 0; checkItemIndex < itemIndex; ++checkItemIndex)
+                {
+                    float differenceScore = DifferenceScoreCalculator(candidate, results[checkItemIndex], scoreIndex);
+                    minimumDifferenceScore = std::min(minimumDifferenceScore, differenceScore);
+                }
+
+                scores[scoreIndex].push_back({ candidateIndex, minimumDifferenceScore });
+            }
+
+            int ijklz = 0;
+
+            // sort the scores from high to low
+            std::sort(
+                scores[scoreIndex].begin(),
+                scores[scoreIndex].end(),
+                [] (const CandidateScore& A, const CandidateScore& B)
+                {
+                    return A.score > B.score;
+                }
+            );
+
+            int ijkl = 0;
+        }
+
+        // TODO: choose the best one you can find.
+        results[itemIndex] = candidates[0];
+
+    }
+}
+
+// -------------------------------------------------------------------------------
+
 template <typename T, typename LAMBDA1, typename LAMBDA2>
 void MitchelsBestCandidateAlgorithm (std::vector<T>& results, int desiredItemCount, int candidateMultiplier, const LAMBDA2& GenerateRandomCandidate, const LAMBDA1& DifferenceScoreCalculator)
 {
@@ -406,7 +498,7 @@ void GeneratePointHashDatas_BlueNoise_2DProjective(std::array<PointHashData, HAS
 
     std::vector<TPoint> points;
 
-    MitchelsBestCandidateAlgorithm(
+    AlansGoodCandidateAlgorithm(
         points,
         HASHCOUNT(),
         20,
@@ -417,8 +509,11 @@ void GeneratePointHashDatas_BlueNoise_2DProjective(std::array<PointHashData, HAS
                 ret[i] = dist(RNG());
             return ret;
         },
-        [](const TPoint& A, const TPoint& B)
+        [](const TPoint& A, const TPoint& B, size_t scoreIndex)
         {
+            // TODO: use the bits in the score index as an axis mask! maybe make the axis masks in advance in this function and use scoreIndex as an index into that.
+            // TODO: hadamard product when multiplying vectors component wise
+
             float distance = 0.0f;
 
             // 2d distance
@@ -1053,6 +1148,7 @@ Notes:
  * if i were doing 3d points, and looking at a 2d subspace i would count the 2d distances as sqrt(2)/sqrt(3).
  * if i were doing 3d points, and looking at a 1d subspace, i would count the 1d distances as 1/sqrt(3).
  * the projective blue noise paper uses sphere packing for specific number of points, which doesn't quite translate to best candidate.
+* My "good score algorithm" grows in complexity very quickly for the number of dimensions
 
 ----- LANDFILL -----
 
