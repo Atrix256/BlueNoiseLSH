@@ -2,7 +2,7 @@
 #define DIMENSION()    2      // dimensionality of the data points
 #define NUMPOINTS()    1000   // the number of randomly generated (white noise) data points
 #define HASHCOUNT()    8      // how many hashes are done for each point
-#define MINHASHCOUNT() 2      // the minimum number of hash collisions that must occur for a point to be considered at all close
+#define MINHASHCOUNT() 3      // the minimum number of hash collisions that must occur for a point to be considered at all close
 #define POINTDOMAIN()  5      // the coordinates go from - this value to + this value
 
 #define IMAGESIZE()       500 // the size of the image - width and height both.  T
@@ -1073,8 +1073,8 @@ int main(int argc, char** argv)
 
 /*
  TODO:
- * tune blue noise now that you can see it plotted.
- * 3 blue noises? 1) blue noise independant on each axis.  2) 2d blue noise. 3) projective blue noise on x and y axis. 4) ??? random axis projective blue noise?
+ * what is the gap in the angular wrap around? is it 2x too large?
+ * DFT of 2d dots and 1d projections.
 ? are the buckets too small? i think they might be... instead of having the domain thing for points, could have a bucket size scale.
 * maybe an option to color cells based on how many hash collisions they have with the query point
 * tyler's article says there is an optimal for white noise. check out what that is, and try it? maybe compare things with that optimal value?
@@ -1083,8 +1083,7 @@ int main(int argc, char** argv)
 * maybe try that "low discrepancy blue noise" thing?
 * check through the code. maybe delete things you don't need naymore?
 * find out how to do n Owen-scrambled Sobol. maybe would be the ideal thing?
-* should probably show DFT of point distribution
-
+* random matrices if needed for higher dimensions, from tyler: One method is to choose normal randoms per matrix entry, take the QR decomp of that, and now Q is a random rotation matrix, essentially.
 
 Tests:
 * white noise
@@ -1097,6 +1096,8 @@ Tests:
 * and maybe calculate mean and variance of cell size if you can
 
 * higher dimensional testing? to see how blue noise / golden ratio / etc behave
+
+
 
 ----- LATER -----
 
@@ -1120,6 +1121,7 @@ Links:
 * frobenius inner product for checking similarity of rotation matrices: https://en.wikipedia.org/wiki/Frobenius_inner_product
 * random rotation matrices: https://en.wikipedia.org/wiki/Rotation_matrix#Uniform_random_rotation_matrices
 * lattice based LHSs are apparently optimal: https://arxiv.org/pdf/1712.08558.pdf
+ * but they can totally be randomized still! do a random rotation / offset on the point before feeding it into the deterministic lattice.
 * projective blue noise: http://resources.mpi-inf.mpg.de/ProjectiveBlueNoise/ProjectiveBlueNoise.pdf
 
 Notes:
@@ -1133,6 +1135,30 @@ Notes:
  * if i were doing 3d points, and looking at a 1d subspace, i would count the 1d distances as 1/sqrt(3).
  * the projective blue noise paper uses sphere packing for specific number of points, which doesn't quite translate to best candidate.
 * My "good score algorithm" grows in complexity very quickly for the number of dimensions
+
+
+----- Good Candidate algorithm -----
+
+co-author with brandon!
+
+Motivation:
+  Dart throwing and best candidate make progressive sequences, but best candidate gives better results.
+  Actually, dart throwing isn't progressive out of the box really! You have a radius!
+  Anyways, not as high quality as voronoi relaxation method, but it's progressive which is neat. Maybe eg 1024 points as constants in a shader, use however many you want, subset of that.
+
+Do the tests from the multijittered sampling: disk, step, gaussian, bilinear.
+
+compare to... ??
+* whtie noise
+* blue noise
+* owen scrambled sobol
+? projective blue noise sampling via other methods?
+? low discrepancy blue noise?
+
+other links:
+renderman: https://graphics.pixar.com/library/RendermanTog2018/paper.pdf
+projective blue noise article: http://resources.mpi-inf.mpg.de/ProjectiveBlueNoise/
+multijittered sampling: https://graphics.pixar.com/library/ProgressiveMultiJitteredSampling/
 
 ----- LANDFILL -----
 
