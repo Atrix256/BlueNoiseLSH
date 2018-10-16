@@ -5,8 +5,7 @@
 #define MINHASHCOUNT() 3      // the minimum number of hash collisions that must occur for a point to be considered at all close
 #define POINTDOMAIN()  5      // the coordinates go from - this value to + this value
 
-#define IMAGESIZE()       500 // the size of the image - width and height both.  T
-#define IMAGEFOOTERSIZE() 500 // the size of the "footer" under the image that shows distribution of angle and offset
+#define IMAGESIZE()       500 // the size of the image - width and height both.
 
 #define DOANGLEIMAGETEST() 1
 
@@ -18,6 +17,7 @@
 #include <unordered_set>
 #include <unordered_map>
 #include <stdint.h>
+#include <complex>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -56,6 +56,109 @@ struct Image
     int m_height;
     std::vector<uint8> m_pixels;
 };
+
+// -------------------------------------------------------------------------------
+
+struct ImageComplex
+{
+    ImageComplex(int width, int height)
+    {
+        m_width = width;
+        m_height = height;
+        m_pixels.resize(m_width*m_height);
+        std::fill(m_pixels.begin(), m_pixels.end(), std::complex<float>(0.0f, 0.0f));
+    }
+
+    int m_width;
+    int m_height;
+    std::vector<std::complex<float>> m_pixels;
+};
+
+// -------------------------------------------------------------------------------
+
+std::complex<float> DFTPixel (const Image &image, int K, int L)
+{
+    std::complex<float> ret(0.0f, 0.0f);
+
+    const uint8* pixel = image.m_pixels.data();
+    for (int y = 0; y < image.m_height; ++y)
+    {
+        for (int x = 0; x < image.m_width; ++x)
+        {
+            float grey = float(pixel[0]) / 255.0f;
+            float v = float(K * x) / float(image.m_width);
+            v += float(L * y) / float(image.m_height);
+            ret += std::complex<float>(grey, 0.0f) * std::polar<float>(1.0f, -2.0f * c_pi * v);
+            pixel += 4;
+        }
+    }
+
+    return ret;
+}
+
+void DFTImage (const Image &srcImage, ImageComplex &destImage)
+{
+    // calculate 2d dft (brute force, not using fast fourier transform)
+    destImage = ImageComplex(srcImage.m_width, srcImage.m_height);
+    std::complex<float>* pixel = destImage.m_pixels.data();
+    for (int y = 0; y < srcImage.m_height; ++y)
+    {
+        for (int x = 0; x < srcImage.m_width; ++x)
+        {
+            *pixel = DFTPixel(srcImage, x, y);
+            pixel++;
+        }
+    }
+}
+
+void GetMagnitudeData (const ImageComplex& srcImage, Image& destImage)
+{
+    // size the output image
+    destImage = Image(srcImage.m_width, srcImage.m_height);
+
+    // get floating point magnitude data
+    std::vector<float> magArray;
+    magArray.resize(srcImage.m_width*srcImage.m_height);
+    float maxmag = 0.0f;
+    for (int x = 0; x < srcImage.m_width; ++x)
+    {
+        for (int y = 0; y < srcImage.m_height; ++y)
+        {
+            // Offset the information by half width & height in the positive direction.
+            // This makes frequency 0 (DC) be at the image origin, like most diagrams show it.
+            int k = (x + srcImage.m_width / 2) % srcImage.m_width;
+            int l = (y + srcImage.m_height / 2) % srcImage.m_height;
+            const std::complex<float> &src = srcImage.m_pixels[l*srcImage.m_width + k];
+
+            float mag = std::abs(src);
+            if (mag > maxmag)
+                maxmag = mag;
+
+            magArray[y*srcImage.m_width + x] = mag;
+        }
+    }
+    if (maxmag == 0.0f)
+        maxmag = 1.0f;
+
+    const float c = 255.0f / log(1.0f+maxmag);
+
+    // normalize the magnitude data and send it back in [0, 255]
+    for (int x = 0; x < srcImage.m_width; ++x)
+    {
+        for (int y = 0; y < srcImage.m_height; ++y)
+        {
+            float src = c * log(1.0f + magArray[y*srcImage.m_width + x]);
+
+            uint8 magu8 = uint8(src);
+
+            uint8* dest = &destImage.m_pixels[(y*destImage.m_width + x) * 4];
+            dest[0] = magu8;
+            dest[1] = magu8;
+            dest[2] = magu8;
+            dest[3] = 255;
+        }
+    }
+}
 
 // -------------------------------------------------------------------------------
 
@@ -881,11 +984,14 @@ void ReportQueryAsImage(const LHS& lhs, const TPoint& queryPoint, const std::uno
     }
 
     // draw the footer - show the angle and offset distribution on a number line
-    Image imageBottom(IMAGESIZE(), IMAGEFOOTERSIZE());
+    Image imageBottom(IMAGESIZE(), IMAGESIZE());
+    Image imageSamples(50, 50);  // TODO: make this be a #define at the top for how large it is
+    ImageComplex imageSamplesDFTComplex(imageSamples.m_width, imageSamples.m_height);
     DrawLine(imageBottom, 0, 0, IMAGESIZE(), 0, 0, 0, 0);
+    DrawLine(imageBottom, 0, IMAGESIZE()-1, IMAGESIZE(), IMAGESIZE()-1, 0, 0, 0);
 
-    int graphSize = int(float(IMAGEFOOTERSIZE()) * 0.7f);
-    int padding = (IMAGEFOOTERSIZE() - graphSize) / 2;
+    int graphSize = int(float(IMAGESIZE()) * 0.7f);
+    int padding = (IMAGESIZE() - graphSize) / 2;
 
     DrawLine(imageBottom, padding, padding, padding + graphSize, padding, 128, 128, 255);
     DrawLine(imageBottom, padding, padding + graphSize, padding + graphSize, padding + graphSize, 128, 128, 255);
@@ -912,12 +1018,32 @@ void ReportQueryAsImage(const LHS& lhs, const TPoint& queryPoint, const std::uno
 
         // draw the 1d offset dots below
         DrawCircle(imageBottom, dotX, padding + graphSize + padding / 2, 2, 0, color, 0);
+
+        // make the sample image
+        {
+            int x = int(anglePercent * float(imageSamples.m_width - 1) + 0.5f);
+            int y = int(p.offsetX  * float(imageSamples.m_height - 1) + 0.5f);
+            uint8* imageSamplePixel = &imageSamples.m_pixels[(y*imageSamples.m_width + x) * 4];
+            imageSamplePixel[0] = 0;
+            imageSamplePixel[1] = 0;
+            imageSamplePixel[2] = 0;
+            imageSamplePixel[3] = 255;
+        }
     }
 
+    // DFT the image samples
+    DFTImage(imageSamples, imageSamplesDFTComplex);
+
     // combine the images
-    Image image(IMAGESIZE(), IMAGESIZE() + IMAGEFOOTERSIZE());
+    Image image(IMAGESIZE(), IMAGESIZE() * 2);
     memcpy(image.m_pixels.data(), imageTop.m_pixels.data(), imageTop.m_pixels.size());
     memcpy(&image.m_pixels[IMAGESIZE()*IMAGESIZE() * 4], imageBottom.m_pixels.data(), imageBottom.m_pixels.size());
+
+    // TODO: formalize an "append vertical" function and copy row by row into the main image somewhere.
+    // TODO: make the dft functions (getmag etc) go y on outside loop, x on inside for cache
+    Image imageSamplesDFT(imageSamples.m_width, imageSamples.m_height);
+    GetMagnitudeData(imageSamplesDFTComplex, imageSamplesDFT);
+    //SaveImage(fileName, imageSamplesDFT);
 
     SaveImage(fileName, image);
 }
